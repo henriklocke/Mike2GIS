@@ -11,6 +11,7 @@ from datetime import timedelta
 import os # for file operations
 import sqlite3
 import ctypes
+import shutil
 MessageBox = ctypes.windll.user32.MessageBoxA
 
 def sql_to_df(sql, full_path):
@@ -79,13 +80,14 @@ def writeMusFile(layerName,elementList,musPath):
         file.write(str(c) + "\n")
     file.close()
 
-
 start_timer = datetime.datetime.now()
 working_folder = os.getcwd()
 
 preprocessing = True
-make_maps = True
+make_maps = False
 
+map_template_pipe = 'Template_Pipe_Review_Map.mxd'
+map_subfolder = 'Review_Maps'
 accepted_distance_pipe = 5
 accepted_distance_node = 1
 accepted_buffer_fraction = 0.99
@@ -108,7 +110,7 @@ match_code_dict[14] = 'Match by manual review'
 match_code_dict[99] = 'No match'
 
 muidCommaSeparated = "FSA_Base_2021pop.sqlite,VSA_BASE_MODEL_2024.sqlite,NSSA_Base_2018pop.sqlite,Lisa_Base.sqlite"
-LayerCommaSeparated = "msm_Node,msm_Link"
+LayerCommaSeparated = "msm_Node,msm_Link,msm_Orifice,msm_Pump,msm_Valve,msm_Weir"
 
 gis_folder = r'G:\GISLayers\Sewer'
 gis_layers = ['Sewer Mains.lyr','Sewer Manholes.lyr','Sewer Chambers.lyr','Sewer Structures.lyr','Sewer Connection.lyr','Sewer Air Vent.lyr','Sewer Fitting.lyr','Sewer Gates.lyr','Sewer Hatch.lyr','Sewer Valves.lyr','Sewer Pumps.lyr','Sewer Cathodic Protection.lyr','Sewer Flow Meters.lyr','Sewer Pump Stations.lyr','Sewer Rectifiers.lyr','Treatment Plants.lyr']
@@ -145,8 +147,14 @@ if preprocessing:
     arcpy.CreatePersonalGDB_management(working_folder,processDB)
     arcpy.env.workspace = process_path
 
-    #Import GIS
+    sqls = []
+    sqls.append("CREATE TABLE Match_Codes (Match_Code INTEGER, Match_Code_Text TEXT)")
+    for match_code in match_code_dict:
+        sqls.append("INSERT INTO Match_Codes (Match_Code, Match_Code_Text) SELECT " + str(match_code) + ", '" + match_code_dict[match_code] + "'")
+    executeQuery(sqls, process_path)
 
+
+    #Import GIS
     sewer_area_path = working_folder + '\\' + sewer_area_file
     ##sewer_area_layer = arcpy.MakeFeatureLayer_management(sewer_area_path, "Sewer_Area_Layer")
     sewer_area_layer = arcpy.MakeFeatureLayer_management(sewer_area_path, "sewer_area_layer")
@@ -229,7 +237,7 @@ if preprocessing:
                 #Add column Model
                 sql = "ALTER TABLE " + l + " ADD COLUMN Model_Area String;"
                 executeQuery(sql, process_path)
-                sql = "UPDATE " + l + " SET Model_Area = '" + m.split('_')[0] + "';"
+                sql = "UPDATE " + l + " SET Model_Area = '" + m.split('_')[0].upper() + "';"
                 executeQuery(sql, process_path)
 
             else:
@@ -243,9 +251,10 @@ if preprocessing:
 
             firstModel = False
 
-        changeFieldType(l,'muid',"TEXT",process_path)
-        changeFieldType(l,'acronym',"TEXT",process_path)
-        changeFieldType(l,'assetname',"TEXT",process_path)
+        if l == 'msm_Link' or l == 'msm_Node':
+            changeFieldType(l,'muid',"TEXT",process_path)
+            changeFieldType(l,'acronym',"TEXT",process_path)
+            changeFieldType(l,'assetname',"TEXT",process_path)
         if l == 'msm_Link':
             changeFieldType(l,'fromnodeid',"TEXT",process_path)
             changeFieldType(l,'tonodeid',"TEXT",process_path)
@@ -259,8 +268,6 @@ if preprocessing:
             else:
                 arcpy.AddField_management(l, coord_dim + "_Model", "DOUBLE")
                 arcpy.CalculateField_management(l, coord_dim + "_Model", "!SHAPE!.centroid." + coord_dim, "PYTHON_9.3")
-
-
 
     #Make master ID table
     sqls = []
@@ -340,7 +347,7 @@ if preprocessing:
     sqls.append("UPDATE Mains_GIS_Model_Match SET ID_Match = 4 WHERE FacilityID = MUID")
     sqls.append("UPDATE Mains_GIS_Model_Match SET Match_Score = ID_Match + Acronym_Match + Accept_Distance + Upstream_ID_Match + Downstream_ID_match + Buffer_Match")
 
-    sqls.append("ALTER TABLE Sewer_Mains ADD COLUMN Match_Code INTEGER, Pre_Match_MUID TEXT")
+    sqls.append("ALTER TABLE Sewer_Mains ADD COLUMN Match_Code INTEGER, Pre_Match_MUID TEXT, Map_Display TEXT")
     sqls.append("UPDATE Sewer_Mains INNER JOIN Mains_GIS_Model_Match ON Sewer_Mains.FacilityID = Mains_GIS_Model_Match.FacilityID SET Sewer_Mains.Match_Code = Mains_GIS_Model_Match.Match_Code, Sewer_Mains.Pre_Match_MUID = Mains_GIS_Model_Match.MUID")
 
     sqls.append("SELECT Match_Code, Count(FacilityID) AS Match_Code_Count INTO Mains_Match_Count FROM Mains_GIS_Model_Match GROUP BY Mains_GIS_Model_Match.Match_Code")
@@ -350,6 +357,8 @@ if preprocessing:
         sqls.append("UPDATE Mains_GIS_Model_Match SET MUID = '" + row['MUID'] + "', Match_Code = 14 WHERE Sewer_area = '" + row['Sewer_Area'] + "' AND FacilityID = '" + row['FacilityID'] + "'")
 
     sqls.append("ALTER TABLE msm_Link ADD COLUMN FacilityID TEXT, Match_Code INTEGER")
+
+    sqls.append("UPDATE Sewer_Mains INNER JOIN Match_Codes ON Sewer_Mains.Match_Code = Match_Codes.Match_Code SET Sewer_Mains.Map_Display = 'Facility ID ' & Sewer_Mains.FacilityID & '. Match Code ' & Sewer_Mains.Match_Code & ': ' & Match_Codes.Match_Code_Text")
 
     executeQuery(sqls, process_path)
     sqls = []
@@ -382,7 +391,6 @@ if preprocessing:
     sql += "WHERE Sewer_Manholes.FacilityID<>msm_Node.muid"
     sqls.append(sql)
 
-    #THIS MUST BE UPDATED, BLINDLY ACCEPTS ID_MATCH!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     sql = "UPDATE Manholes_Initial_Match INNER JOIN Manholes_GIS_Model_Match ON (Manholes_Initial_Match.FacilityID = Manholes_GIS_Model_Match.FacilityID) AND (Manholes_Initial_Match.Sewer_Area = Manholes_GIS_Model_Match.Sewer_Area) "
     sql += "SET Manholes_GIS_Model_Match.MUID = [Manholes_Initial_Match].[muid], Manholes_GIS_Model_Match.Match_Code = 10 WHERE Acronym_Match = 1 AND Accept_Dist = 1"
     sqls.append(sql)
@@ -403,7 +411,6 @@ if preprocessing:
     df = pd.read_csv(working_folder + '\\Manholes_Manual_Assignment.csv', dtype={'FacilityID':str,'MUID':str})
     for index, row in df.iterrows():
         sqls.append("UPDATE Manholes_GIS_Model_Match SET MUID = '" + row['MUID'] + "', Match_Code = 14 WHERE Sewer_area = '" + row['Sewer_Area'] + "' AND FacilityID = '" + row['FacilityID'] + "'")
-
 
     sql = "SELECT * FROM Manholes_Acronym_MHName_Match"
     df = sql_to_df(sql, process_path)
@@ -456,7 +463,7 @@ if preprocessing:
             sqls = []
             sqls.append("UPDATE msm_Link SET FacilityID = '', Match_Code = 0")
             sqls.append("UPDATE msm_Link INNER JOIN Mains_GIS_Model_Match ON msm_Link.MUID = Mains_GIS_Model_Match.MUID SET msm_Link.FacilityID = Mains_GIS_Model_Match.FacilityID, \
-                msm_Link.Match_Code = Mains_GIS_Model_Match.Match_Code WHERE Mains_GIS_Model_Match.Match_Code = 0 and Mains_GIS_Model_Match.Match_Code <> 99")
+                msm_Link.Match_Code = Mains_GIS_Model_Match.Match_Code WHERE Mains_GIS_Model_Match.Map_Match = 0 and Mains_GIS_Model_Match.Match_Code <> 99")
             sqls.append("UPDATE msm_Link INNER JOIN Mains_GIS_Model_Match ON msm_Link.FacilityID = Mains_GIS_Model_Match.FacilityID SET Map_Match = 1 WHERE msm_Link.FacilityID IS NOT NULL")
             executeQuery(sqls, process_path)
 
@@ -464,6 +471,15 @@ if preprocessing:
             arcpy.Append_management(inputs='temp_layer', target='msm_Link_Map', schema_type="NO_TEST", field_mapping="", subtype="")
             arcpy.Delete_management("temp_layer")
 
+if make_maps:
+    pass
+##    jpg_folder = workingFolder + r'\Acronym_Summary\Maps'
+##    if not os.path.exists(jpg_folder):
+##        os.makedirs(jpg_folder)
+##    for i in range(1, mxd.dataDrivenPages.pageCount + 1):
+##       mxd.dataDrivenPages.currentPageID = i
+##       row = mxd.dataDrivenPages.pageRow
+##       arcpy.mapping.ExportToJPEG(mxd, jpg_folder + "\\" + row.getValue('Acronym_Key') + ".jpg")
 
 end_timer = datetime.datetime.now()
 duration = end_timer - start_timer
