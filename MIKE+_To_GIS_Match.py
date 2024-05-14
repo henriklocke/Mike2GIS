@@ -83,16 +83,21 @@ start_timer = datetime.datetime.now()
 working_folder = os.getcwd()
 
 preprocessing = True
-make_maps = False
+make_maps_mains = False
+make_maps_manholes = False
 
 map_template_pipe = 'Template_Pipe_Review_Map.mxd'
 map_template_node = 'Template_Manhole_Review_Map.mxd'
 map_subfolder = 'Review_Maps'
 accepted_distance_pipe = 5
-accepted_distance_node = 1
+accepted_distance_node = 3
 accepted_buffer_fraction = 0.99
 buffer_size = 0.1 #On each side
 expanded_extend_m = 100000
+
+#Do not include Base, must be list of subscenarios, even if only 1
+subscenario_dict = {}
+subscenario_dict['FSA'] = ['2030_Network']
 
 match_code_dict = {}
 match_code_dict[1] = 'Match by ID, acronym; and start or end location'
@@ -152,6 +157,7 @@ if preprocessing:
 
     sqls = []
     sqls.append("CREATE TABLE Match_Codes (Match_Code INTEGER, Match_Code_Text TEXT)")
+
     for match_code in match_code_dict:
         sqls.append("INSERT INTO Match_Codes (Match_Code, Match_Code_Text) SELECT " + str(match_code) + ", '" + match_code_dict[match_code] + "'")
     executeQuery(sqls, process_path)
@@ -236,6 +242,8 @@ if preprocessing:
         firstModel = True
         for m in modelList:
 
+            model_area = m.split('_')[0].upper()
+
             print "Importing " + l + " from " + m
 
             MUPath = working_folder + "\\" + m
@@ -246,19 +254,39 @@ if preprocessing:
                 arcpy.FeatureClassToFeatureClass_conversion("temp_layer", process_path, l)
                 arcpy.Delete_management("temp_layer")
                 #Add column Model
-                sql = "ALTER TABLE " + l + " ADD COLUMN Model_Area String;"
+                sql = "ALTER TABLE " + l + " ADD COLUMN Model_Area STRING, Scenario STRING, Remove_Duplicate INTEGER;"
                 executeQuery(sql, process_path)
-                sql = "UPDATE " + l + " SET Model_Area = '" + m.split('_')[0].upper() + "';"
+                sql = "UPDATE " + l + " SET Scenario = 'Base', Model_Area = '" + model_area + "';"
                 executeQuery(sql, process_path)
-
             else:
                 #Append element
                 feature_class_path = MUPath + "\\" + l
                 arcpy.MakeFeatureLayer_management(MUPath+ "\\" + l, "temp_layer", "active = 1")
                 arcpy.Append_management("temp_layer", l, "NO_TEST","","")
                 arcpy.Delete_management("temp_layer")
-                sql = "UPDATE " + l + " SET Model_Area = '" + m.split('_')[0] + "' WHERE Model_Area IS NULL;"
+                sql = "UPDATE " + l + " SET Scenario = 'Base', Model_Area = '" + model_area + "' WHERE Model_Area IS NULL;"
                 executeQuery(sql, process_path)
+
+            #Add sub scenarios
+            if model_area in [model for model in subscenario_dict]:
+                print model_area
+                for subscenario in subscenario_dict[model_area]:
+                    sql = "SELECT altid FROM m_ScenarioManagementAlternative WHERE muid = '" + subscenario + "' AND groupid = 'CS_Network'"
+                    altid_record = readQuery(sql,MUPath)
+                    if len(altid_record) == 0:
+                        message = "Tool ends. Sub scenario " + subscenario + " not found in " + model_area + "\n\n"
+                        MessageBox = ctypes.windll.user32.MessageBoxA
+                        MessageBox(None, message, 'Info', 0)
+                        exit()
+                    else:
+                        altid = altid_record[0][0]
+                        #Append element
+                        feature_class_path = MUPath + "\\" + l
+                        arcpy.MakeFeatureLayer_management(MUPath+ "\\" + l, "temp_layer", "altid = " + str(altid))
+                        arcpy.Append_management("temp_layer", l, "NO_TEST","","")
+                        arcpy.Delete_management("temp_layer")
+                        sql = "UPDATE " + l + " SET Scenario = '" + subscenario + "', Model_Area = '" + model_area + "' WHERE Model_Area IS NULL;"
+                        executeQuery(sql, process_path)
 
             firstModel = False
 
@@ -279,6 +307,21 @@ if preprocessing:
             else:
                 arcpy.AddField_management(l, coord_dim + "_Model", "DOUBLE")
                 arcpy.CalculateField_management(l, coord_dim + "_Model", "!SHAPE!.centroid." + coord_dim, "PYTHON_9.3")
+
+        #remove sub scenario duplicates, only elements unique to this sub scenario will be kept.
+        sqls = []
+        sqls.append("CREATE TABLE Duplicates (Model_Area TEXT, MUID TEXT)")
+        sqls.append("INSERT INTO Duplicates (Model_Area, MUID) SELECT Model_Area, muid  FROM " + l + " GROUP BY Model_Area, muid HAVING Count(muid)>1")
+        sqls.append("SELECT Model_Area, muid INTO Duplicates FROM " + l + " GROUP BY Model_Area, muid HAVING Count(muid)>1")
+        sqls.append("UPDATE " + l + " SET Remove_Duplicate = 1")
+        sqls.append("UPDATE " + l + " INNER JOIN Duplicates ON (" + l + ".muid = Duplicates.muid) AND (" + l + ".Model_Area = Duplicates.Model_Area) SET " + l + ".Remove_Duplicate = 1 WHERE " + l + ".Scenario <> 'Base'")
+        sqls.append("DROP TABLE Duplicates")
+        executeQuery(sql,process_path)
+        sql = "SELECT COUNT(muid) FROM " + l + " WHERE Remove_Duplicate = 1"
+        remove_count = readQuery(sql,process_path)[0][0]
+        if remove_count > 1:
+            arcpy.DeleteFeatures_management(l, "Remove_Duplicate=1")
+
 
     #Make master ID table
     sqls = []
@@ -329,7 +372,7 @@ if preprocessing:
     sqls.append("ALTER TABLE Sewer_Main_Buffer_Intersect ADD COLUMN Int_Fraction DOUBLE")
     sqls.append("UPDATE Sewer_Main_Buffer_Intersect SET Int_Fraction = SHAPE_Length / GIS_Pipe_Length")
     sql = "UPDATE Mains_GIS_Model_Match INNER JOIN Sewer_Main_Buffer_Intersect ON Mains_GIS_Model_Match.FacilityID = Sewer_Main_Buffer_Intersect.FacilityID "
-    sql += "SET Mains_GIS_Model_Match.Match_Code = 5, Mains_GIS_Model_Match.MUID = Sewer_Main_Buffer_Intersect.muid, Mains_GIS_Model_Match.Buffer_Match = 5 WHERE Mains_GIS_Model_Match.Match_Code = 99 AND Sewer_Main_Buffer_Intersect.Int_Fraction >= " + str(accepted_buffer_fraction)
+    sql += "SET Mains_GIS_Model_Match.Match_Code = 5, Mains_GIS_Model_Match.MUID = Sewer_Main_Buffer_Intersect.muid, Mains_GIS_Model_Match.Buffer_Match = 1 WHERE Mains_GIS_Model_Match.Match_Code = 99 AND Sewer_Main_Buffer_Intersect.Int_Fraction >= " + str(accepted_buffer_fraction)
     sqls.append(sql)
     sqls.append("UPDATE Mains_GIS_Model_Match SET Match_Code = 4 WHERE Match_Code = 5 AND FacilityID = MUID")
 
@@ -337,7 +380,7 @@ if preprocessing:
     sqls.append("SELECT Sewer_Mains.Sewer_Area, Sewer_Mains.FacilityID, msm_Link.muid, 0 AS ID_Match, From_Node_GIS, To_Node_GIS, fromnodeid AS From_Node_Model, tonodeid AS To_Node_Model INTO Upstream_Downstream_Match FROM Sewer_Mains INNER JOIN msm_Link ON (Sewer_Mains.To_Node_GIS = msm_Link.tonodeid) AND (Sewer_Mains.From_Node_GIS = msm_Link.fromnodeid)")
     sqls.append("UPDATE Upstream_Downstream_Match SET ID_Match = 1 WHERE FacilityID = MUID")
     sql = "UPDATE Mains_GIS_Model_Match INNER JOIN Upstream_Downstream_Match ON Mains_GIS_Model_Match.FacilityID = Upstream_Downstream_Match.FacilityID "
-    sql += "SET Mains_GIS_Model_Match.MUID = Upstream_Downstream_Match.muid, Mains_GIS_Model_Match.Match_Code = 6, Upstream_ID_Match = 3, Downstream_ID_Match = 3 WHERE Mains_GIS_Model_Match.Match_Code=99"
+    sql += "SET Mains_GIS_Model_Match.MUID = Upstream_Downstream_Match.muid, Mains_GIS_Model_Match.Match_Code = 6, Upstream_ID_Match = 1, Downstream_ID_Match = 1 WHERE Mains_GIS_Model_Match.Match_Code=99"
     sqls.append(sql)
 
     #Matchcode 7: Match by  upstream and downstream node ID
@@ -346,16 +389,16 @@ if preprocessing:
     #Matchcode 8: Match by ID and upstream node ID
     sqls.append("SELECT Sewer_Mains.FacilityID, msm_Link.muid, From_Node_GIS, To_Node_GIS, fromnodeid AS From_Node_Model, tonodeid AS To_Node_Model INTO Upstream_Match FROM Sewer_Mains INNER JOIN msm_Link ON (Sewer_Mains.FacilityID = msm_Link.muid) AND (Sewer_Mains.From_Node_GIS = msm_Link.fromnodeid)")
     sql = "UPDATE Mains_GIS_Model_Match INNER JOIN Upstream_Match ON Mains_GIS_Model_Match.FacilityID = Upstream_Match.FacilityID "
-    sql += "SET Mains_GIS_Model_Match.MUID = Upstream_Match.muid, Mains_GIS_Model_Match.Match_Code = 8, Upstream_ID_Match = 3 WHERE Mains_GIS_Model_Match.Match_Code=99"
+    sql += "SET Mains_GIS_Model_Match.MUID = Upstream_Match.muid, Mains_GIS_Model_Match.Match_Code = 8, Upstream_ID_Match = 1 WHERE Mains_GIS_Model_Match.Match_Code=99"
     sqls.append(sql)
 
     #Matchcode 9: Match by ID and downstream node ID
     sqls.append("SELECT Sewer_Mains.FacilityID, msm_Link.muid, From_Node_GIS, To_Node_GIS, fromnodeid AS From_Node_Model, tonodeid AS To_Node_Model  INTO Downstream_Match FROM Sewer_Mains INNER JOIN msm_Link ON (Sewer_Mains.FacilityID = msm_Link.muid) AND (Sewer_Mains.To_Node_GIS = msm_Link.tonodeid)")
     sql = "UPDATE Mains_GIS_Model_Match INNER JOIN Downstream_Match ON Mains_GIS_Model_Match.FacilityID = Downstream_Match.FacilityID "
-    sql += "SET Mains_GIS_Model_Match.MUID = Downstream_Match.muid, Mains_GIS_Model_Match.Match_Code = 9, Downstream_ID_Match = 3 WHERE Mains_GIS_Model_Match.Match_Code=99"
+    sql += "SET Mains_GIS_Model_Match.MUID = Downstream_Match.muid, Mains_GIS_Model_Match.Match_Code = 9, Downstream_ID_Match = 1 WHERE Mains_GIS_Model_Match.Match_Code=99"
     sqls.append(sql)
 
-    sqls.append("UPDATE Mains_GIS_Model_Match SET ID_Match = 4 WHERE FacilityID = MUID")
+    sqls.append("UPDATE Mains_GIS_Model_Match SET ID_Match = 1 WHERE FacilityID = MUID")
     sqls.append("UPDATE Mains_GIS_Model_Match SET Match_Score = ID_Match + Acronym_Match + Accept_Distance + Upstream_ID_Match + Downstream_ID_match + Buffer_Match")
 
     df = pd.read_csv(working_folder + '\\Mains_Manual_Assignment.csv', dtype={'FacilityID':str,'MUID':str})
@@ -376,7 +419,6 @@ if preprocessing:
     executeQuery(sqls, process_path)
 
     arcpy.Buffer_analysis("Sewer_Mains", "Sewer_Mains_Page_Buffer", str(1))
-
 
 
     sql = "SELECT * FROM Mains_GIS_Model_Match"
@@ -411,17 +453,17 @@ if preprocessing:
     sqls.append("UPDATE Manholes_Initial_Match SET MHName_Match = 1 WHERE assetname = MHName")
     sqls.append("UPDATE Manholes_Initial_Match SET Accept_Dist = 1 WHERE Distance <= " + str(accepted_distance_node))
 
-    sql = "UPDATE Manholes_Initial_Match SET Match_Code = 10 WHERE Acronym_Match = 1 AND Accept_Dist = 1"
+    sql = "UPDATE Manholes_Initial_Match SET Match_Code = 10 WHERE MHName_Match = 1 AND Accept_Dist = 1"
     sqls.append(sql)
 
-    sql = "UPDATE Manholes_Initial_Match SET Match_Code = 11 WHERE Acronym_Match = 0 AND Accept_Dist = 1"
+    sql = "UPDATE Manholes_Initial_Match SET Match_Code = 11 WHERE MHName_Match = 0 AND Accept_Dist = 1"
     sqls.append(sql)
 
-    sql = "UPDATE Manholes_Initial_Match SET Match_Code = 12 WHERE Acronym_Match = 1 AND Accept_Dist = 0"
+    sql = "UPDATE Manholes_Initial_Match SET Match_Code = 12 WHERE MHName_Match = 1 AND Accept_Dist = 0"
     sqls.append(sql)
 
     sql = "UPDATE Manholes_Initial_Match INNER JOIN Manholes_GIS_Model_Match ON (Manholes_Initial_Match.FacilityID = Manholes_GIS_Model_Match.FacilityID) AND (Manholes_Initial_Match.Sewer_Area = Manholes_GIS_Model_Match.Sewer_Area) "
-    sql += "SET Manholes_GIS_Model_Match.MUID = [Manholes_Initial_Match].[muid], Manholes_GIS_Model_Match.Match_Code = Manholes_GIS_Model_Match.Match_Code"
+    sql += "SET Manholes_GIS_Model_Match.MUID = [Manholes_Initial_Match].[muid], Manholes_GIS_Model_Match.Match_Code = Manholes_Initial_Match.Match_Code"
     sqls.append(sql)
 
     sqls.append("ALTER TABLE Sewer_Manholes ADD COLUMN Match_Code INTEGER, MUID TEXT, Map_Display TEXT, Map_Name TEXT")
@@ -493,12 +535,11 @@ if preprocessing:
             arcpy.Append_management(inputs='temp_layer', target='msm_Link_Map', schema_type="NO_TEST", field_mapping="", subtype="")
             arcpy.Delete_management("temp_layer")
 
-
     sqls = []
     sqls.append("UPDATE Manholes_GIS_Model_Match SET Map_Match = 0")
     sqls.append("ALTER TABLE msm_Node ADD COLUMN FacilityID TEXT, Match_Code INTEGER")
-    sqls.append("UPDATE msm_Node INNER JOIN Manholes_GIS_Model_Match ON msm_Node.MUID = Mains_GIS_Model_Match.MUID SET msm_Node.FacilityID = Mains_GIS_Model_Match.FacilityID, msm_Node.Match_Code = Mains_GIS_Model_Match.Match_Code")
-    sqls.append("UPDATE msm_Node INNER JOIN Manholes_GIS_Model_Match ON msm_Node.FacilityID = Mains_GIS_Model_Match.FacilityID SET Map_Match = 1 WHERE msm_Node.FacilityID IS NOT NULL")
+    sqls.append("UPDATE msm_Node INNER JOIN Manholes_GIS_Model_Match ON msm_Node.MUID = Manholes_GIS_Model_Match.MUID SET msm_Node.FacilityID = Manholes_GIS_Model_Match.FacilityID, msm_Node.Match_Code = Manholes_GIS_Model_Match.Match_Code")
+    sqls.append("UPDATE msm_Node INNER JOIN Manholes_GIS_Model_Match ON msm_Node.FacilityID = Manholes_GIS_Model_Match.FacilityID SET Map_Match = 1 WHERE msm_Node.FacilityID IS NOT NULL")
     executeQuery(sqls, process_path)
     arcpy.FeatureClassToFeatureClass_conversion('msm_Node', process_path, 'msm_Node_Map')
     while iter_count < 1000 and remaining_count > 0:
@@ -518,8 +559,7 @@ if preprocessing:
             arcpy.Append_management(inputs='temp_layer', target='msm_Node_Map', schema_type="NO_TEST", field_mapping="", subtype="")
             arcpy.Delete_management("temp_layer")
 
-
-if make_maps:
+if make_maps_manholes or make_maps_mains:
     #Mains Maps
     map_folder = working_folder + '\\' + map_subfolder
     if not os.path.isdir(map_folder): os.makedirs(map_folder)
@@ -530,22 +570,24 @@ if make_maps:
         map_subfolder = map_folder + '\\' + sewer_area
         if not os.path.isdir(map_subfolder): os.makedirs(map_subfolder)
 
-    mxd = arcpy.mapping.MapDocument(working_folder + '\\' + map_template_pipe)
-    page_count = mxd.dataDrivenPages.pageCount
-    for i in range(1, page_count + 1):
-        print 'Making pipe jpg ' + str(i) + ' of ' + str(page_count)
-        mxd.dataDrivenPages.currentPageID = i
-        row = mxd.dataDrivenPages.pageRow
-        arcpy.mapping.ExportToJPEG(mxd, map_folder + "\\" + row.getValue('Sewer_Area') + '\\' + row.getValue('Map_Name') + ".jpg")
+    if make_maps_mains:
+        mxd = arcpy.mapping.MapDocument(working_folder + '\\' + map_template_pipe)
+        page_count = mxd.dataDrivenPages.pageCount
+        for i in range(1, page_count + 1):
+            print 'Making pipe jpg ' + str(i) + ' of ' + str(page_count)
+            mxd.dataDrivenPages.currentPageID = i
+            row = mxd.dataDrivenPages.pageRow
+            arcpy.mapping.ExportToJPEG(mxd, map_folder + "\\" + row.getValue('Sewer_Area') + '\\' + row.getValue('Map_Name') + ".jpg")
 
     #Manhole Maps
-    mxd = arcpy.mapping.MapDocument(working_folder + '\\' + map_template_node)
-    page_count = mxd.dataDrivenPages.pageCount
-    for i in range(1, page_count + 1):
-        print 'Making node jpg ' + str(i) + ' of ' + str(page_count)
-        mxd.dataDrivenPages.currentPageID = i
-        row = mxd.dataDrivenPages.pageRow
-        arcpy.mapping.ExportToJPEG(mxd, map_folder + "\\" + row.getValue('Sewer_Area') + '\\' + row.getValue('Map_Name') + ".jpg")
+    if make_maps_manholes:
+        mxd = arcpy.mapping.MapDocument(working_folder + '\\' + map_template_node)
+        page_count = mxd.dataDrivenPages.pageCount
+        for i in range(1, page_count + 1):
+            print 'Making node jpg ' + str(i) + ' of ' + str(page_count)
+            mxd.dataDrivenPages.currentPageID = i
+            row = mxd.dataDrivenPages.pageRow
+            arcpy.mapping.ExportToJPEG(mxd, map_folder + "\\" + row.getValue('Sewer_Area') + '\\' + row.getValue('Map_Name') + ".jpg")
 
 end_timer = datetime.datetime.now()
 duration = end_timer - start_timer
