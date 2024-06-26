@@ -156,6 +156,9 @@ process_path = working_folder + "\\" + processDB
 if preprocessing:
 
     #Find the latest review folder
+    pipe_review_found = False
+    node_review_found = False
+    not_founds = ''
     for item in os.listdir(working_folder):
     	if os.path.isdir(os.path.join(working_folder, item)):
     		if re.match(pattern,item):
@@ -164,10 +167,20 @@ if preprocessing:
         review_folder = max(folder) #Max based on folder name which will be the one with the highest date
         for model_area in model_areas:
             review_folder_model = review_folder + '\\' + model_area
+            pipe_review_csv = review_folder_model + '\\' + sewer_area + '_Review_Mains.csv'
+            if os.path.exists(pipe_review_csv):
+                pipe_review_df_single = pd.read_csv(pipe_review_csv, dtype={FacilityID:str,MUID:str})
+            else:
+                not_founds.append(sewer_area + '_Review_Mains.csv')
+
+            node_review_csv = review_folder_model + '\\' + sewer_area + '_Review_Manholes.csv'
+            if os.path.exists(node_review_csv):
+                node_review_df_single = pd.read_csv(node_review_csv, dtype={FacilityID:str,MUID:str})
+            else:
+                not_founds.append(sewer_area + '_Review_Mains.csv')
 
 
     #Delete mdb if it exists and create a new
-
     os.remove(process_path) if os.path.exists(process_path) else None
     arcpy.CreatePersonalGDB_management(working_folder,processDB)
     arcpy.env.workspace = process_path
