@@ -84,10 +84,11 @@ def writeMusFile(layerName,elementList,musPath):
 start_timer = datetime.datetime.now()
 working_folder = os.getcwd()
 
-preprocessing = False
+preprocessing = True
 make_maps_mains = False
 make_maps_manholes = False
 make_review_csvs = True
+make_mus = False
 
 map_template_pipe = 'Template_Pipe_Review_Map.mxd'
 map_template_node = 'Template_Manhole_Review_Map.mxd'
@@ -111,10 +112,9 @@ match_code_dict[2] = 'Match by ID; and start or end location'
 match_code_dict[3] = 'Match by ID and acronym'
 match_code_dict[4] = 'Match by ID and buffer'
 match_code_dict[5] = 'Match by buffer'
-match_code_dict[6] = 'Match by ID; and upstream and downstream node ID'
-match_code_dict[7] = 'Match by upstream and downstream node ID'
-match_code_dict[8] = 'Match by ID and upstream node ID'
-match_code_dict[9] = 'Match by ID and downstream node ID'
+match_code_dict[6] = 'Match by ID; and upstream and downstream node ID' #Auto accepted
+match_code_dict[7] = 'Match by ID and upstream node ID'
+match_code_dict[8] = 'Match by ID and downstream node ID'
 match_code_dict[10] = 'Match by ID, MH Name and location' #Auto accepted
 match_code_dict[11] = 'Match by ID and location' #Auto accepted
 match_code_dict[12] = 'Match by ID and MH Name'
@@ -136,7 +136,7 @@ modelList = [x.strip() for x in muidCommaSeparated.split(',')]
 
 layerList = [x.strip() for x in LayerCommaSeparated.split(',')]
 
-model_areas = [x.split('_')[0] for x in muidCommaSeparated.split(',')]
+model_areas = [x.split('_')[0].upper() for x in muidCommaSeparated.split(',')]
 
 coord_dims = ['X','Y']
 ends = [['Start','first','From'],['End','last','To']]
@@ -155,31 +155,55 @@ process_path = working_folder + "\\" + processDB
 
 if preprocessing:
 
+    #Do review ##################################################################################################################
     #Find the latest review folder
     pipe_review_found = False
     node_review_found = False
-    not_founds = ''
-    for item in os.listdir(working_folder):
-    	if os.path.isdir(os.path.join(working_folder, item)):
-    		if re.match(pattern,item):
+    not_founds = []
+    folders = []
+    map_folder = working_folder + '\\' + map_subfolder
+    for item in os.listdir(map_folder):
+    	if os.path.isdir(os.path.join(map_folder, item)):
+    		if re.match(r'^\d{8}_\d{4}$',item):
     			folders.append(item)
     if len(folders) > 0:
-        review_folder = max(folder) #Max based on folder name which will be the one with the highest date
+        review_folder = map_folder + '\\' + max(folders) #Max based on folder name which will be the one with the highest date
         for model_area in model_areas:
             review_folder_model = review_folder + '\\' + model_area
-            pipe_review_csv = review_folder_model + '\\' + sewer_area + '_Review_Mains.csv'
+            pipe_review_csv = review_folder_model + '\\' + model_area + '_Review_Mains.csv'
+            print(pipe_review_csv)
             if os.path.exists(pipe_review_csv):
-                pipe_review_df_single = pd.read_csv(pipe_review_csv, dtype={FacilityID:str,MUID:str})
+                pipe_review_df_single = pd.read_csv(pipe_review_csv, dtype={'FacilityID':str,'MUID':str})
+                pipe_review_df = pipe_review_df_single.copy() if not 'pipe_review_single' in locals() else pd.concat([pipe_review_df,pipe_review_df_single])
             else:
-                not_founds.append(sewer_area + '_Review_Mains.csv')
+                not_founds.append(model_area + '_Review_Mains.csv')
 
-            node_review_csv = review_folder_model + '\\' + sewer_area + '_Review_Manholes.csv'
+            node_review_csv = review_folder_model + '\\' + model_area + '_Review_Manholes.csv'
             if os.path.exists(node_review_csv):
-                node_review_df_single = pd.read_csv(node_review_csv, dtype={FacilityID:str,MUID:str})
+                node_review_df_single = pd.read_csv(node_review_csv, dtype={'FacilityID':str,'MUID':str})
+                node_review_df = node_review_df_single.copy() if not 'node_review_single' in locals() else pd.concat([node_review_df,node_review_df_single])
             else:
-                not_founds.append(sewer_area + '_Review_Mains.csv')
+                not_founds.append(model_area + '_Review_Manholes.csv')
+
+        if len(not_founds) > 0:
+            messageText = "The following review files were not found: \n\n"
+            for f in not_founds:
+                messageText += f + "\n"
+            messageText += "\nContinue?"
+            MessageBox = ctypes.windll.user32.MessageBoxA
+            if MessageBox(None, messageText, 'Info', 4) == 7:
+                MessageBox(None, "Please look inside the folders and ask around if the review was done.", 'Info', 0)
+                exit()
+    else:
+        MessageBox = ctypes.windll.user32.MessageBoxA
+        if MessageBox(None, "No past review folder was found under\n\n" + review_folder + '\n\nContinue?', 'Info', 4) == 7:
+            MessageBox(None, "Please check the folder setup.", 'Info', 0)
+            exit()
 
 
+
+
+    #Create database ############################################################################################################################
     #Delete mdb if it exists and create a new
     os.remove(process_path) if os.path.exists(process_path) else None
     arcpy.CreatePersonalGDB_management(working_folder,processDB)
@@ -358,10 +382,10 @@ if preprocessing:
     #Mains
     sqls.append("SELECT Sewer_Area, FacilityID, Acronym INTO Mains_GIS_Model_Match FROM Sewer_Mains WHERE Sewer_Area IS NOT NULL GROUP BY Sewer_Area, FacilityID, Acronym")
     sql = "ALTER TABLE Mains_GIS_Model_Match ADD COLUMN MUID TEXT, Match_Code INTEGER, "
-    sql += "ID_Match INTEGER, Acronym_Match INTEGER, Accept_Distance INTEGER, Upstream_ID_Match INTEGER, Downstream_ID_Match INTEGER, Buffer_Match INTEGER, Map_Match INTEGER, Reviewed INTEGER"
+    sql += "ID_Match INTEGER, Acronym_Match INTEGER, Accept_Distance INTEGER, Upstream_ID_Match INTEGER, Downstream_ID_Match INTEGER, Buffer_Match INTEGER, Map_Match INTEGER, Reviewed INTEGER, Pending_Review INTEGER"
     sqls.append(sql)
 
-    sql = "SELECT FacilityID, muid, Sewer_Area, Model_Area, Sewer_Mains.Acronym AS Acronym_GIS, msm_Link.Acronym AS Acronym_Model, Start_X_GIS, Start_Y_GIS, End_X_GIS, End_Y_GIS, Start_X_Model, Start_Y_Model, End_X_Model, End_Y_Model, "
+    sql = "SELECT FacilityID, muid, Sewer_Area, Model_Area, Sewer_Mains.Acronym AS Acronym, msm_Link.Acronym AS Acronym_Model, Start_X_GIS, Start_Y_GIS, End_X_GIS, End_Y_GIS, Start_X_Model, Start_Y_Model, End_X_Model, End_Y_Model, "
     sql += "((Start_X_GIS - Start_X_Model)^2 + (Start_Y_GIS - Start_Y_Model)^2)^0.5 AS Start_Distance, ((End_X_GIS - End_X_Model)^2 + (End_Y_GIS - End_Y_Model)^2)^0.5 AS End_Distance, 0 AS Accept_Dist, 1 AS Accept_Both_Dist, 0 AS Match_Acronym, 99 AS Match_Code "
     sql += "INTO Mains_Match FROM Sewer_Mains INNER JOIN msm_Link ON Sewer_Mains.FacilityID = msm_Link.muid"
     sqls.append(sql)
@@ -414,19 +438,16 @@ if preprocessing:
     sql += "SET Mains_GIS_Model_Match.MUID = Upstream_Downstream_Match.muid, Mains_GIS_Model_Match.Match_Code = 6, Upstream_ID_Match = 1, Downstream_ID_Match = 1 WHERE Mains_GIS_Model_Match.Match_Code=99"
     sqls.append(sql)
 
-    #Matchcode 7: Match by  upstream and downstream node ID
-    sqls.append("UPDATE Mains_GIS_Model_Match SET Match_Code = 7 WHERE Match_Code = 6 AND FacilityID <> MUID")
-
-    #Matchcode 8: Match by ID and upstream node ID
+    #Matchcode 7: Match by ID and upstream node ID
     sqls.append("SELECT Sewer_Mains.FacilityID, msm_Link.muid, From_Node_GIS, To_Node_GIS, fromnodeid AS From_Node_Model, tonodeid AS To_Node_Model INTO Upstream_Match FROM Sewer_Mains INNER JOIN msm_Link ON (Sewer_Mains.FacilityID = msm_Link.muid) AND (Sewer_Mains.From_Node_GIS = msm_Link.fromnodeid)")
     sql = "UPDATE Mains_GIS_Model_Match INNER JOIN Upstream_Match ON Mains_GIS_Model_Match.FacilityID = Upstream_Match.FacilityID "
-    sql += "SET Mains_GIS_Model_Match.MUID = Upstream_Match.muid, Mains_GIS_Model_Match.Match_Code = 8, Upstream_ID_Match = 1 WHERE Mains_GIS_Model_Match.Match_Code=99"
+    sql += "SET Mains_GIS_Model_Match.MUID = Upstream_Match.muid, Mains_GIS_Model_Match.Match_Code = 7, Upstream_ID_Match = 1 WHERE Mains_GIS_Model_Match.Match_Code=99"
     sqls.append(sql)
 
-    #Matchcode 9: Match by ID and downstream node ID
+    #Matchcode 8: Match by ID and downstream node ID
     sqls.append("SELECT Sewer_Mains.FacilityID, msm_Link.muid, From_Node_GIS, To_Node_GIS, fromnodeid AS From_Node_Model, tonodeid AS To_Node_Model  INTO Downstream_Match FROM Sewer_Mains INNER JOIN msm_Link ON (Sewer_Mains.FacilityID = msm_Link.muid) AND (Sewer_Mains.To_Node_GIS = msm_Link.tonodeid)")
     sql = "UPDATE Mains_GIS_Model_Match INNER JOIN Downstream_Match ON Mains_GIS_Model_Match.FacilityID = Downstream_Match.FacilityID "
-    sql += "SET Mains_GIS_Model_Match.MUID = Downstream_Match.muid, Mains_GIS_Model_Match.Match_Code = 9, Downstream_ID_Match = 1 WHERE Mains_GIS_Model_Match.Match_Code=99"
+    sql += "SET Mains_GIS_Model_Match.MUID = Downstream_Match.muid, Mains_GIS_Model_Match.Match_Code = 8, Downstream_ID_Match = 1 WHERE Mains_GIS_Model_Match.Match_Code=99"
     sqls.append(sql)
 
     sqls.append("UPDATE Mains_GIS_Model_Match SET ID_Match = 1 WHERE FacilityID = MUID")
@@ -460,86 +481,101 @@ if preprocessing:
     #Nodes *******************************************************************************************************************************************************************************************************************
 
     sqls = []
-    sqls.append("SELECT Sewer_Area, FacilityID, Acronym, MHName INTO Manholes_GIS_Model_Match FROM Sewer_Manholes WHERE Sewer_Area IS NOT NULL AND FacilityID IS NOT Null GROUP BY Sewer_Area, FacilityID, Acronym, MHName")
+##    sqls.append("SELECT Sewer_Area, FacilityID, Acronym, MHName INTO Manholes_GIS_Model_Match FROM Sewer_Manholes WHERE Sewer_Area IS NOT NULL AND FacilityID IS NOT Null GROUP BY Sewer_Area, FacilityID, Acronym, MHName")
 
-    sqls.append("ALTER TABLE Manholes_GIS_Model_Match ADD COLUMN MUID TEXT, Match_Code INTEGER, Map_Match INTEGER, Reviewed INTEGER")
-    sqls.append("UPDATE Manholes_GIS_Model_Match SET Match_Code = 99")
+##    #Initialize Manholes_GIS_Model_Match table
+##    sqls.append("ALTER TABLE Manholes_GIS_Model_Match ADD COLUMN MUID TEXT, Match_Code INTEGER, Map_Match INTEGER, Approved_For_GIS INTEGER, Reviewed INTEGER, New_Review INTEGER")
+##    sqls.append("UPDATE Manholes_GIS_Model_Match SET Match_Code = 99")
 
+    #Initialize Manholes_GIS_Model_Match table
     sql = "SELECT Sewer_Manholes.Sewer_Area, msm_Node.Model_Area, Sewer_Manholes.FacilityID, msm_Node.muid, Sewer_Manholes.MHName, msm_Node.assetname, "
-    sql += "Sewer_Manholes.Acronym AS GIS_Acronym, msm_Node.acronym AS Model_Acronym, Sewer_Manholes.X_GIS, Sewer_Manholes.Y_GIS, msm_Node.X_Model, msm_Node.Y_Model, "
-    sql += "((X_GIS - X_Model)^2 + (Y_GIS - Y_Model)^2)^0.5 AS Distance, 99 AS Match_Code, 0 AS ID_Match, 0 AS Accept_Dist, 0 AS Acronym_Match, 0 AS MHName_Match "
-    sql += "INTO Manholes_Initial_Match FROM Sewer_Manholes INNER JOIN msm_Node ON Sewer_Manholes.FacilityID = msm_Node.muid "
+    sql += "Sewer_Manholes.Acronym AS Acronym, msm_Node.acronym AS Model_Acronym, Sewer_Manholes.X_GIS, Sewer_Manholes.Y_GIS, msm_Node.X_Model, msm_Node.Y_Model, "
+    sql += "((X_GIS - X_Model)^2 + (Y_GIS - Y_Model)^2)^0.5 AS Distance, 99 AS Match_Code, 0 AS ID_Match, 0 AS Accept_Dist, 0 AS Acronym_Match, 0 AS MHName_Match, "
+    sql += "0 AS Map_Match, 0 AS Approved_For_GIS, 0 AS Reviewed, 0 AS Pending_Review "
+    sql += "INTO Manholes_GIS_Model_Match FROM Sewer_Manholes INNER JOIN msm_Node ON Sewer_Manholes.FacilityID = msm_Node.muid "
     sql += "WHERE Sewer_Manholes.Sewer_Area Is Not Null AND msm_Node.Model_Area=Sewer_Manholes.Sewer_Area"
     sqls.append(sql)
 
-    sql = "SELECT Sewer_Manholes.SewerageArea, msm_Node.muid, Sewer_Manholes.FacilityID, Sewer_Manholes.Acronym, Sewer_Manholes.MHName, msm_Node.X_Model, msm_Node.Y_Model, Sewer_Manholes.X_GIS, Sewer_Manholes.Y_GIS, "
-    sql += "((X_GIS - X_Model)^2 + (Y_GIS - Y_Model)^2)^0.5 AS Distance, 0 AS Map_Match INTO Manholes_Acronym_MHName_Match "
-    sql += "FROM msm_Node INNER JOIN Sewer_Manholes ON (msm_Node.assetname = Sewer_Manholes.MHName) AND (msm_Node.Model_Area = Sewer_Manholes.SewerageArea) AND (msm_Node.acronym = Sewer_Manholes.Acronym) "
-    sql += "WHERE Sewer_Manholes.FacilityID<>msm_Node.muid"
-    sqls.append(sql)
-
+    #Register initial matches
     executeQuery(sqls, process_path)
     sqls = []
-    sqls.append("UPDATE Manholes_Initial_Match SET ID_Match = 1 WHERE muid = FacilityID")
-    sqls.append("UPDATE Manholes_Initial_Match SET Acronym_Match = 1 WHERE Model_Acronym = GIS_Acronym")
-    sqls.append("UPDATE Manholes_Initial_Match SET MHName_Match = 1 WHERE assetname = MHName")
-    sqls.append("UPDATE Manholes_Initial_Match SET Accept_Dist = 1 WHERE Distance <= " + str(accepted_distance_node))
+    sqls.append("UPDATE Manholes_GIS_Model_Match SET ID_Match = 1 WHERE muid = FacilityID")
+    sqls.append("UPDATE Manholes_GIS_Model_Match SET Acronym_Match = 1 WHERE Model_Acronym = Acronym")
+    sqls.append("UPDATE Manholes_GIS_Model_Match SET MHName_Match = 1 WHERE assetname = MHName")
+    sqls.append("UPDATE Manholes_GIS_Model_Match SET Accept_Dist = 1 WHERE Distance <= " + str(accepted_distance_node))
 
-    sql = "UPDATE Manholes_Initial_Match SET Match_Code = 10 WHERE MHName_Match = 1 AND Accept_Dist = 1"
+    sql = "UPDATE Manholes_GIS_Model_Match SET Match_Code = 10 WHERE MHName_Match = 1 AND Accept_Dist = 1"
     sqls.append(sql)
 
-    sql = "UPDATE Manholes_Initial_Match SET Match_Code = 11 WHERE MHName_Match = 0 AND Accept_Dist = 1"
+    sql = "UPDATE Manholes_GIS_Model_Match SET Match_Code = 11 WHERE MHName_Match = 0 AND Accept_Dist = 1"
     sqls.append(sql)
 
-    sql = "UPDATE Manholes_Initial_Match SET Match_Code = 12 WHERE MHName_Match = 1 AND Accept_Dist = 0"
+    sql = "UPDATE Manholes_GIS_Model_Match SET Match_Code = 12 WHERE MHName_Match = 1 AND Accept_Dist = 0"
     sqls.append(sql)
 
-    sql = "UPDATE Manholes_Initial_Match INNER JOIN Manholes_GIS_Model_Match ON (Manholes_Initial_Match.FacilityID = Manholes_GIS_Model_Match.FacilityID) AND (Manholes_Initial_Match.Sewer_Area = Manholes_GIS_Model_Match.Sewer_Area) "
-    sql += "SET Manholes_GIS_Model_Match.MUID = [Manholes_Initial_Match].[muid], Manholes_GIS_Model_Match.Match_Code = Manholes_Initial_Match.Match_Code"
+##    #Now transfer these values to Manholes_GIS_Model_Match
+##    sql = "UPDATE Manholes_GIS_Model_Match INNER JOIN Manholes_GIS_Model_Match ON (Manholes_GIS_Model_Match.FacilityID = Manholes_GIS_Model_Match.FacilityID) AND (Manholes_GIS_Model_Match.Sewer_Area = Manholes_GIS_Model_Match.Sewer_Area) "
+##    sql += "SET Manholes_GIS_Model_Match.MUID = [Manholes_GIS_Model_Match].[muid], Manholes_GIS_Model_Match.Match_Code = Manholes_GIS_Model_Match.Match_Code"
+##    sqls.append(sql)
+
+    #Read manual assignment
+    df = pd.read_csv(working_folder + '\\Manholes_Manual_Assignment.csv', dtype={'FacilityID':str,'MUID':str})
+    for index, row in df.iterrows():
+        sqls.append("UPDATE Manholes_GIS_Model_Match SET MUID = '" + row['MUID'] + "', Match_Code = 14 WHERE Sewer_area = '" + row['Sewer_Area'] + "' AND FacilityID = '" + row['FacilityID'] + "'")
+
+    #Register approval for GIS
+    sql = "UPDATE Manholes_GIS_Model_Match SET Approved_For_GIS = 1 WHERE Match_Code = 10 OR Match_Code = 11 OR Match_Code = 14 OR Match_Code = 15"
     sqls.append(sql)
 
-    sqls.append("ALTER TABLE Sewer_Manholes ADD COLUMN Match_Code INTEGER, MUID TEXT, Map_Display TEXT, Map_Name TEXT")
-    sqls.append("UPDATE Sewer_Manholes INNER JOIN Manholes_GIS_Model_Match ON Sewer_Manholes.FacilityID = Manholes_GIS_Model_Match.FacilityID SET Sewer_Manholes.Match_Code = Manholes_GIS_Model_Match.Match_Code, Sewer_Manholes.MUID = Manholes_GIS_Model_Match.MUID")
+    #Register for upcoming manual approval
+    sql = "UPDATE Manholes_GIS_Model_Match SET Pending_Review = 1 WHERE Match_Code = 12 OR Match_Code = 13"
+    sqls.append(sql)
 
+    #Transfer the MUID and match code from Manholes_GIS_Model_Match to Sewer_Manholes so they can be mapped.
+    sqls.append("ALTER TABLE Sewer_Manholes ADD COLUMN Match_Code INTEGER, MUID TEXT, Map_Display TEXT, Map_Name TEXT, Pending_Review INTEGER")
+    sqls.append("UPDATE Sewer_Manholes INNER JOIN Manholes_GIS_Model_Match ON Sewer_Manholes.FacilityID = Manholes_GIS_Model_Match.FacilityID SET \
+        Sewer_Manholes.Match_Code = Manholes_GIS_Model_Match.Match_Code, Sewer_Manholes.MUID = Manholes_GIS_Model_Match.MUID, Sewer_Manholes.Pending_Review = Manholes_GIS_Model_Match.Pending_Review")
+
+    #Create the map text.
     sql = "UPDATE Sewer_Manholes INNER JOIN Match_Codes ON Sewer_Manholes.Match_Code = Match_Codes.Match_Code "
     sql += "SET Sewer_Manholes.Map_Display = 'GIS Facility ID ' & Sewer_Manholes.FacilityID & ', Model MUID ' & Sewer_Manholes.MUID & ' ' & "
     sql += "IIF(Sewer_Manholes.MUID=Sewer_Manholes.FacilityID,'(Same)','(Different)') & '\nMatch Code ' & Sewer_Manholes.Match_Code & ': ' & Match_Codes.Match_Code_Text"
     sqls.append(sql)
     sqls.append("UPDATE Sewer_Manholes SET Map_Name = Sewer_Area & '_Manholes_Matchcode_' & Match_Code & '_FacilityID_' & FacilityID WHERE Match_Code <> 99 AND Match_Code IS NOT NULL")
 
-    df = pd.read_csv(working_folder + '\\Manholes_Manual_Assignment.csv', dtype={'FacilityID':str,'MUID':str})
-    for index, row in df.iterrows():
-        sqls.append("UPDATE Manholes_GIS_Model_Match SET MUID = '" + row['MUID'] + "', Match_Code = 14 WHERE Sewer_area = '" + row['Sewer_Area'] + "' AND FacilityID = '" + row['FacilityID'] + "'")
-
     sqls.append("UPDATE Manholes_GIS_Model_Match SET Reviewed = 0")
     executeQuery(sqls, process_path)
 
-    sql = "SELECT * FROM Manholes_Acronym_MHName_Match"
-    df = sql_to_df(sql, process_path)
-    df.to_csv(working_folder + '\\Manholes_Acronym_MHName_Match_Manual_Review.csv', index=False)
+    #Delete MUID value where not approved
+    sqls.append("UPDATE Manholes_GIS_Model_Match SET MUID = 0")
 
-    sql = "SELECT * FROM Manholes_GIS_Model_Match"
+    sqls.append("SELECT Sewer_Area, FacilityID, Acronym, MHName, MUID, Match_Code, Approved_For_GIS INTO Manholes_GIS_Model_Match_Final FROM Manholes_GIS_Model_Match")
+    sqls.append("UPDATE Manholes_GIS_Model_Match_Final SET MUID = '' WHERE Approved_For_GIS = 0")
+
+    executeQuery(sqls, process_path)
+
+    sql = "SELECT * FROM Manholes_GIS_Model_Match_Final"
     df = sql_to_df(sql, process_path)
     df.to_csv(working_folder + '\\Manhole_GIS_Model_Match.csv', index=False)
 
     #Create mus files
-    for sewer_area_name in sewer_area_names:
-        sql = "SELECT muid FROM Upstream_Downstream_Match WHERE ID_Match = 0 AND Sewer_Area = '" + sewer_area_name + "'"
-        df = sql_to_df(sql, process_path)
-        muids = list(df.muid.unique())
-        writeMusFile('msm_Link',muids,working_folder + '\\' + sewer_area_name + '_US_And_DS_But_Not_ID_Match.mus')
-
-        sql = "SELECT Match_Code FROM Mains_GIS_Model_Match WHERE Sewer_Area = '" + sewer_area_name + "' GROUP BY Match_Code"
-        df = sql_to_df(sql, process_path)
-        match_codes = list(df.match_code.unique())
-        for match_code in match_codes:
-            sql = "SELECT muid FROM Mains_GIS_Model_Match WHERE Match_Code = " + str(match_code) + " AND Sewer_Area = '" + sewer_area_name + "'"
+    if make_mus:
+        for sewer_area_name in sewer_area_names:
+            sql = "SELECT muid FROM Upstream_Downstream_Match WHERE ID_Match = 0 AND Sewer_Area = '" + sewer_area_name + "'"
             df = sql_to_df(sql, process_path)
             muids = list(df.muid.unique())
-            writeMusFile('msm_Link',muids,working_folder + '\\' + sewer_area_name + "_Pipes_Match_Code_" + str(match_code) + ".mus")
+            writeMusFile('msm_Link',muids,working_folder + '\\' + sewer_area_name + '_US_And_DS_But_Not_ID_Match.mus')
+
+            sql = "SELECT Match_Code FROM Mains_GIS_Model_Match WHERE Sewer_Area = '" + sewer_area_name + "' GROUP BY Match_Code"
+            df = sql_to_df(sql, process_path)
+            match_codes = list(df.match_code.unique())
+            for match_code in match_codes:
+                sql = "SELECT muid FROM Mains_GIS_Model_Match WHERE Match_Code = " + str(match_code) + " AND Sewer_Area = '" + sewer_area_name + "'"
+                df = sql_to_df(sql, process_path)
+                muids = list(df.muid.unique())
+                writeMusFile('msm_Link',muids,working_folder + '\\' + sewer_area_name + "_Pipes_Match_Code_" + str(match_code) + ".mus")
 
     #Create copy of msm_Link
-
     sqls = []
     sqls.append("UPDATE Mains_GIS_Model_Match SET Map_Match = 0")
     sqls.append("UPDATE msm_Link INNER JOIN Mains_GIS_Model_Match ON msm_Link.MUID = Mains_GIS_Model_Match.MUID SET msm_Link.FacilityID = Mains_GIS_Model_Match.FacilityID, msm_Link.Match_Code = Mains_GIS_Model_Match.Match_Code")
@@ -626,6 +662,7 @@ if make_maps_manholes or make_maps_mains or make_review_csvs:
         sql = "SELECT Sewer_Area, FacilityID, MUID, Acronym, Match_Code FROM Mains_GIS_Model_Match WHERE Reviewed = 0 AND Match_Code <> 99 AND Match_Code IS NOT NULL ORDER BY  Sewer_Area, Match_Code, FacilityID"
         df_review = sql_to_df(sql,process_path)
         df_review.columns = ['Sewer_Area','FacilityID','MUID','Acronym','Match_Code']
+        df_review['Accepted'] = 0
         for sewer_area in sewer_areas:
             sewer_area = sewer_area[0]
             df_review_local =  df_review[df_review.Sewer_Area==sewer_area]
