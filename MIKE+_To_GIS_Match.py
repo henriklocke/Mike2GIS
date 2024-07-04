@@ -123,7 +123,7 @@ match_code_dict[15] = 'Manually approved'
 match_code_dict[99] = 'No match'
 
 muidCommaSeparated = "FSA_Base_2021pop.sqlite,VSA_BASE_MODEL_2024.sqlite,NSSA_Base_2018pop.sqlite,Lisa_Base.sqlite"
-muidCommaSeparated = "NSSA_Base_2018pop.sqlite"
+##muidCommaSeparated = "NSSA_Base_2018pop.sqlite"
 LayerCommaSeparated = "msm_Node,msm_Link,msm_Orifice,msm_Pump,msm_Valve,msm_Weir"
 
 gis_folder = r'G:\GISLayers\Sewer'
@@ -293,6 +293,9 @@ if preprocessing:
         except Exception:
             pass
 
+    sql = "CREATE TABLE Duplicates_All (Model_Area TEXT, MUID TEXT, MUID_Key TEXT, Layer TEXT)"
+    executeQuery(sql,process_path)
+
     for l in layerList:
 
         firstModel = True
@@ -310,7 +313,7 @@ if preprocessing:
                 arcpy.FeatureClassToFeatureClass_conversion("temp_layer", process_path, l)
                 arcpy.Delete_management("temp_layer")
                 #Add column Model
-                sql = "ALTER TABLE " + l + " ADD COLUMN Model_Area STRING, Scenario STRING, Remove_Duplicate INTEGER;"
+                sql = "ALTER TABLE " + l + " ADD COLUMN Model_Area STRING, MUID_Key STRING, Scenario STRING, Remove_Duplicate INTEGER;"
                 executeQuery(sql, process_path)
                 sql = "UPDATE " + l + " SET Scenario = 'Base', Model_Area = '" + model_area + "';"
                 executeQuery(sql, process_path)
@@ -364,19 +367,27 @@ if preprocessing:
                 arcpy.AddField_management(l, coord_dim + "_Model", "DOUBLE")
                 arcpy.CalculateField_management(l, coord_dim + "_Model", "!SHAPE!.centroid." + coord_dim, "PYTHON_9.3")
 
-        #remove sub scenario duplicates, only elements unique to this sub scenario will be kept.
-        sqls = []
-        sqls.append("CREATE TABLE Duplicates (Model_Area TEXT, MUID TEXT)")
-        sqls.append("INSERT INTO Duplicates (Model_Area, MUID) SELECT Model_Area, muid  FROM " + l + " GROUP BY Model_Area, muid HAVING Count(muid)>1")
-        sqls.append("SELECT Model_Area, muid INTO Duplicates FROM " + l + " GROUP BY Model_Area, muid HAVING Count(muid)>1")
-        sqls.append("UPDATE " + l + " SET Remove_Duplicate = 1")
-        sqls.append("UPDATE " + l + " INNER JOIN Duplicates ON (" + l + ".muid = Duplicates.muid) AND (" + l + ".Model_Area = Duplicates.Model_Area) SET " + l + ".Remove_Duplicate = 1 WHERE " + l + ".Scenario <> 'Base'")
-        sqls.append("DROP TABLE Duplicates")
+        #remove sub scenario duplicates, only elements unique to this sub scenario will be kept. Also set MUID_Key.
+
+        sql = "UPDATE " + l + " SET MUID_Key = Model_Area & '@' & MUID"
         executeQuery(sql,process_path)
+        sqls = []
+##        sqls.append("CREATE TABLE Duplicates_All (Model_Area TEXT, MUID TEXT, MUID_Key TEXT, Layer TEXT)")
+##        sqls.append("INSERT INTO Duplicates (Model_Area, MUID) SELECT Model_Area, muid  FROM " + l + " GROUP BY Model_Area, muid HAVING Count(muid)>1")
+        sqls.append("SELECT Model_Area, muid, MUID_Key, '" + l + "' AS Layer INTO Duplicates FROM " + l + " GROUP BY Model_Area, muid, MUID_Key HAVING Count(muid)>1")
+        sqls.append("UPDATE " + l + " SET Remove_Duplicate = 0")
+        sqls.append("UPDATE " + l + " INNER JOIN Duplicates ON (" + l + ".MUID_Key = Duplicates.MUID_Key) SET " + l + ".Remove_Duplicate = 1 WHERE " + l + ".Scenario <> 'Base'")
+        sqls.append("INSERT INTO Duplicates_All SELECT * FROM Duplicates")
+        sqls.append("DROP TABLE Duplicates")
+
+        executeQuery(sqls,process_path)
+
         sql = "SELECT COUNT(muid) FROM " + l + " WHERE Remove_Duplicate = 1"
         remove_count = readQuery(sql,process_path)[0][0]
         if remove_count > 1:
-            arcpy.DeleteFeatures_management(l, "Remove_Duplicate=1")
+            arcpy.MakeFeatureLayer_management(l, "temp_layer", "Remove_Duplicate=1")
+            arcpy.DeleteFeatures_management("temp_layer")
+            arcpy.Delete_management("temp_layer")
 
 
     #Make master ID table
@@ -386,13 +397,17 @@ if preprocessing:
 ##    sql = "ALTER TABLE Mains_GIS_Model_Match ADD COLUMN MUID TEXT, Match_Code INTEGER, "
 ##    sql += "ID_Match INTEGER, Acronym_Match INTEGER, Accept_Distance INTEGER, Upstream_ID_Match INTEGER, Downstream_ID_Match INTEGER, Buffer_Match INTEGER, Map_Match INTEGER, Reviewed INTEGER, Pending_Review INTEGER"
 ##    sqls.append(sql)
+    sql = "ALTER TABLE Sewer_Mains ADD COLUMN Facility_KEY TEXT, GIS_Pipe_Length DOUBLE, From_Node_GIS TEXT, To_Node_GIS TEXT, From_Table_GIS TEXT, To_Table_GIS TEXT"
+    executeQuery(sql,process_path)
 
+    sql = "UPDATE Sewer_Mains SET Facility_KEY = Sewer_Area & '@' & FacilityID"
+    executeQuery(sql,process_path)
 
-    sql = "SELECT FacilityID, muid, Sewer_Area, Model_Area, Sewer_Mains.Acronym AS Acronym, msm_Link.Acronym AS Acronym_Model, Start_X_GIS, Start_Y_GIS, End_X_GIS, End_Y_GIS, Start_X_Model, Start_Y_Model, End_X_Model, End_Y_Model, "
+    sql = "SELECT FacilityID, muid, Facility_KEY, MUID_Key, Sewer_Area, Model_Area, Sewer_Mains.Acronym AS Acronym, msm_Link.Acronym AS Acronym_Model, Start_X_GIS, Start_Y_GIS, End_X_GIS, End_Y_GIS, Start_X_Model, Start_Y_Model, End_X_Model, End_Y_Model, "
     sql += "((Start_X_GIS - Start_X_Model)^2 + (Start_Y_GIS - Start_Y_Model)^2)^0.5 AS Start_Distance, ((End_X_GIS - End_X_Model)^2 + (End_Y_GIS - End_Y_Model)^2)^0.5 AS End_Distance, "
     sql += "0 AS Accept_Dist, 0 AS Accept_Both_Dist, 1 AS ID_Match, 0 AS Acronym_Match, 0 AS Upstream_ID_Match, 0 AS Downstream_ID_Match, 0 AS Buffer_Match, 0 AS Map_Match, 0 AS Reviewed, "
     sql += "0 AS Pending_Review, 0 AS Approved_For_GIS, 99 AS Match_Code "
-    sql += "INTO Mains_GIS_Model_Match FROM Sewer_Mains LEFT JOIN msm_Link ON Sewer_Mains.FacilityID = msm_Link.muid AND Sewer_Mains.Sewer_Area = msm_Link.Model_Area "
+    sql += "INTO Mains_GIS_Model_Match FROM Sewer_Mains LEFT JOIN msm_Link ON Sewer_Mains.Facility_Key = msm_Link.MUID_Key "
     sql += "WHERE Sewer_Mains.Sewer_Area IS NOT NULL AND Sewer_Mains.FacilityID IS NOT NULL"
     executeQuery(sql,process_path)
 
@@ -407,7 +422,7 @@ if preprocessing:
     sqls.append("UPDATE Mains_GIS_Model_Match SET Acronym_Match = 1 WHERE Acronym = Acronym_Model AND Sewer_Area = Model_Area")
     sqls.append("UPDATE Mains_GIS_Model_Match SET Match_Code = IIF(Acronym_Match = 1 AND Accept_Dist = 1, 0, IIF(Accept_Both_Dist = 1, 1, IIF(Accept_Dist = 1, 2, IIF(Acronym_Match = 1, 3, 99))))")
 
-    sqls.append("ALTER TABLE Sewer_Mains ADD COLUMN GIS_Pipe_Length DOUBLE, From_Node_GIS TEXT, To_Node_GIS TEXT, From_Table_GIS TEXT, To_Table_GIS TEXT")
+
     sqls.append("UPDATE Sewer_Mains SET GIS_Pipe_Length = SHAPE_Length")
 
     for gis_layer in gis_layers[1:]:
@@ -430,34 +445,33 @@ if preprocessing:
     sqls.append("ALTER TABLE Sewer_Main_Buffer_Intersect ADD COLUMN Int_Fraction DOUBLE")
     sqls.append("UPDATE Sewer_Main_Buffer_Intersect SET Int_Fraction = SHAPE_Length / GIS_Pipe_Length")
 
-    sql = "UPDATE Mains_GIS_Model_Match INNER JOIN Sewer_Main_Buffer_Intersect ON Mains_GIS_Model_Match.FacilityID = Sewer_Main_Buffer_Intersect.FacilityID "
-    sql += "AND Mains_GIS_Model_Match.Sewer_Area =  Sewer_Main_Buffer_Intersect.Sewer_Area "
-    sql += "SET Mains_GIS_Model_Match.Match_Code = 5, Mains_GIS_Model_Match.MUID = Sewer_Main_Buffer_Intersect.muid, Mains_GIS_Model_Match.Buffer_Match = 1 "
+    sql = "UPDATE Mains_GIS_Model_Match INNER JOIN Sewer_Main_Buffer_Intersect ON Mains_GIS_Model_Match.Facility_Key = Sewer_Main_Buffer_Intersect.Facility_Key "
+    sql += "SET Mains_GIS_Model_Match.Match_Code = 5, Mains_GIS_Model_Match.MUID_Key = Sewer_Main_Buffer_Intersect.MUID_Key, Mains_GIS_Model_Match.MUID = Sewer_Main_Buffer_Intersect.muid, Mains_GIS_Model_Match.Buffer_Match = 1 "
     sql += "WHERE Mains_GIS_Model_Match.Match_Code = 99 AND Sewer_Main_Buffer_Intersect.Int_Fraction >= " + str(accepted_buffer_fraction)
     sqls.append(sql)
     sqls.append("UPDATE Mains_GIS_Model_Match SET Match_Code = 4 WHERE Match_Code = 5 AND FacilityID = MUID")
 
     #Matchcode 6: Match by ID; and upstream and downstream node ID
-    sqls.append("SELECT Sewer_Mains.Sewer_Area, Sewer_Mains.FacilityID, msm_Link.muid, From_Node_GIS, To_Node_GIS, fromnodeid AS From_Node_Model, \
+    sqls.append("SELECT Sewer_Mains.Sewer_Area, Sewer_Mains.FacilityID, Sewer_Mains.Facility_Key, msm_Link.muid, msm_Link.MUID_Key, From_Node_GIS, To_Node_GIS, fromnodeid AS From_Node_Model, \
         tonodeid AS To_Node_Model INTO Upstream_Downstream_Match FROM Sewer_Mains INNER JOIN msm_Link ON \
-        (Sewer_Mains.To_Node_GIS = msm_Link.tonodeid) AND (Sewer_Mains.From_Node_GIS = msm_Link.fromnodeid) AND (Sewer_Mains.FacilityID = msm_Link.muid)")
+        (Sewer_Mains.To_Node_GIS = msm_Link.tonodeid) AND (Sewer_Mains.From_Node_GIS = msm_Link.fromnodeid) AND (Sewer_Mains.Facility_Key = msm_Link.MUID_Key)")
 ##    sqls.append("UPDATE Upstream_Downstream_Match SET ID_Match = 1 WHERE FacilityID = MUID")
-    sql = "UPDATE Mains_GIS_Model_Match INNER JOIN Upstream_Downstream_Match ON Mains_GIS_Model_Match.FacilityID = Upstream_Downstream_Match.FacilityID "
-    sql += "SET Mains_GIS_Model_Match.MUID = Upstream_Downstream_Match.muid, Mains_GIS_Model_Match.Match_Code = 6, Upstream_ID_Match = 1, Downstream_ID_Match = 1 WHERE Mains_GIS_Model_Match.Match_Code=99"
+    sql = "UPDATE Mains_GIS_Model_Match INNER JOIN Upstream_Downstream_Match ON Mains_GIS_Model_Match.Facility_Key = Upstream_Downstream_Match.Facility_Key "
+    sql += "SET Mains_GIS_Model_Match.MUID = Upstream_Downstream_Match.muid, Mains_GIS_Model_Match.MUID_Key = Upstream_Downstream_Match.MUID_Key, Mains_GIS_Model_Match.Match_Code = 6, Upstream_ID_Match = 1, Downstream_ID_Match = 1 WHERE Mains_GIS_Model_Match.Match_Code=99"
     sqls.append(sql)
 
     #Matchcode 7: Match by ID and upstream node ID
-    sqls.append("SELECT Sewer_Mains.FacilityID, msm_Link.muid, From_Node_GIS, To_Node_GIS, fromnodeid AS From_Node_Model, tonodeid AS To_Node_Model INTO Upstream_Match \
-        FROM Sewer_Mains INNER JOIN msm_Link ON (Sewer_Mains.FacilityID = msm_Link.muid) AND (Sewer_Mains.From_Node_GIS = msm_Link.fromnodeid)")
-    sql = "UPDATE Mains_GIS_Model_Match INNER JOIN Upstream_Match ON Mains_GIS_Model_Match.FacilityID = Upstream_Match.FacilityID "
-    sql += "SET Mains_GIS_Model_Match.MUID = Upstream_Match.muid, Mains_GIS_Model_Match.Match_Code = 7, Upstream_ID_Match = 1 WHERE Mains_GIS_Model_Match.Match_Code=99"
+    sqls.append("SELECT Sewer_Mains.FacilityID, Sewer_Mains.Facility_Key, msm_Link.muid, msm_Link.MUID_Key, From_Node_GIS, To_Node_GIS, fromnodeid AS From_Node_Model, tonodeid AS To_Node_Model INTO Upstream_Match \
+        FROM Sewer_Mains INNER JOIN msm_Link ON (Sewer_Mains.Facility_Key = msm_Link.MUID_Key) AND (Sewer_Mains.From_Node_GIS = msm_Link.fromnodeid)")
+    sql = "UPDATE Mains_GIS_Model_Match INNER JOIN Upstream_Match ON Mains_GIS_Model_Match.Facility_Key = Upstream_Match.Facility_Key "
+    sql += "SET Mains_GIS_Model_Match.MUID = Upstream_Match.muid, Mains_GIS_Model_Match.MUID_Key = Upstream_Match.MUID_Key, Mains_GIS_Model_Match.Match_Code = 7, Upstream_ID_Match = 1 WHERE Mains_GIS_Model_Match.Match_Code=99"
     sqls.append(sql)
 
     #Matchcode 8: Match by ID and downstream node ID
-    sqls.append("SELECT Sewer_Mains.FacilityID, msm_Link.muid, From_Node_GIS, To_Node_GIS, fromnodeid AS From_Node_Model, tonodeid AS To_Node_Model  INTO Downstream_Match \
-        FROM Sewer_Mains INNER JOIN msm_Link ON (Sewer_Mains.FacilityID = msm_Link.muid) AND (Sewer_Mains.To_Node_GIS = msm_Link.tonodeid)")
-    sql = "UPDATE Mains_GIS_Model_Match INNER JOIN Downstream_Match ON Mains_GIS_Model_Match.FacilityID = Downstream_Match.FacilityID "
-    sql += "SET Mains_GIS_Model_Match.MUID = Downstream_Match.muid, Mains_GIS_Model_Match.Match_Code = 8, Downstream_ID_Match = 1 WHERE Mains_GIS_Model_Match.Match_Code=99"
+    sqls.append("SELECT Sewer_Mains.FacilityID, Sewer_Mains.Facility_Key, msm_Link.muid, msm_Link.MUID_Key, From_Node_GIS, To_Node_GIS, fromnodeid AS From_Node_Model, tonodeid AS To_Node_Model  INTO Downstream_Match \
+        FROM Sewer_Mains INNER JOIN msm_Link ON (Sewer_Mains.Facility_Key = msm_Link.MUID_Key) AND (Sewer_Mains.To_Node_GIS = msm_Link.tonodeid)")
+    sql = "UPDATE Mains_GIS_Model_Match INNER JOIN Downstream_Match ON Mains_GIS_Model_Match.Facility_Key = Downstream_Match.Facility_Key "
+    sql += "SET Mains_GIS_Model_Match.MUID = Downstream_Match.muid, Mains_GIS_Model_Match.MUID_Key = Downstream_Match.MUID_Key, Mains_GIS_Model_Match.Match_Code = 8, Downstream_ID_Match = 1 WHERE Mains_GIS_Model_Match.Match_Code=99"
     sqls.append(sql)
 
     sqls.append("UPDATE Mains_GIS_Model_Match SET ID_Match = 1 WHERE FacilityID = MUID")
@@ -466,7 +480,7 @@ if preprocessing:
 
     df = pd.read_csv(working_folder + '\\Mains_Manual_Assignment.csv', dtype={'FacilityID':str,'MUID':str})
     for index, row in df.iterrows():
-        sqls.append("UPDATE Mains_GIS_Model_Match SET MUID = '" + row['MUID'] + "', Match_Code = 14 WHERE Sewer_area = '" + row['Sewer_Area'] + "' AND FacilityID = '" + row['FacilityID'] + "'")
+        sqls.append("UPDATE Mains_GIS_Model_Match SET MUID = '" + row['MUID'] + "', MUID_Key = Sewer_Area & '@" + row['MUID'] + "', Match_Code = 14 WHERE Sewer_area = '" + row['Sewer_Area'] + "' AND FacilityID = '" + row['FacilityID'] + "'")
 
     sqls.append("ALTER TABLE Sewer_Mains ADD COLUMN Match_Code INTEGER, MUID TEXT, Map_Display TEXT, Map_Name TEXT, Approved_For_GIS INTEGER, Pending_Review INTEGER")
     executeQuery(sqls, process_path)
@@ -483,14 +497,14 @@ if preprocessing:
     sqls.append(sql)
 
 
-    sql = "UPDATE Sewer_Mains INNER JOIN Mains_GIS_Model_Match ON Sewer_Mains.FacilityID = Mains_GIS_Model_Match.FacilityID SET Sewer_Mains.Match_Code = Mains_GIS_Model_Match.Match_Code, "
+    sql = "UPDATE Sewer_Mains INNER JOIN Mains_GIS_Model_Match ON Sewer_Mains.Facility_Key = Mains_GIS_Model_Match.Facility_Key SET Sewer_Mains.Match_Code = Mains_GIS_Model_Match.Match_Code, "
     sql += "Sewer_Mains.MUID = Mains_GIS_Model_Match.MUID, Sewer_Mains.Pending_Review = Mains_GIS_Model_Match.Pending_Review, Sewer_Mains.Approved_For_GIS = Mains_GIS_Model_Match.Approved_For_GIS"
 
     sqls.append(sql)
 
     sqls.append("SELECT Match_Code, Count(FacilityID) AS Match_Code_Count INTO Mains_GIS_Model_Match_Count FROM Mains_GIS_Model_Match GROUP BY Mains_GIS_Model_Match.Match_Code")
 
-    sqls.append("ALTER TABLE msm_Link ADD COLUMN FacilityID TEXT, Match_Code INTEGER")
+    sqls.append("ALTER TABLE msm_Link ADD COLUMN FacilityID TEXT, Facility_Key TEXT, Match_Code INTEGER")
 
 
     sql = "UPDATE Sewer_Mains INNER JOIN Match_Codes ON Sewer_Mains.Match_Code = Match_Codes.Match_Code "
@@ -515,6 +529,10 @@ if preprocessing:
     df.to_csv(working_folder + '\\Mains_GIS_Model_Match.csv', index=False)
 
     #Nodes *******************************************************************************************************************************************************************************************************************
+    sqls = []
+    sqls.append("ALTER TABLE Sewer_Manholes ADD COLUMN Facility_KEY TEXT, Match_Code INTEGER, MUID TEXT, Map_Display TEXT, Map_Name TEXT, Pending_Review INTEGER")
+    sqls.append("UPDATE Sewer_Manholes SET Facility_KEY = Sewer_Area & '@' & FacilityID")
+    executeQuery(sqls,process_path)
 
     sqls = []
 ##    sqls.append("SELECT Sewer_Area, FacilityID, Acronym, MHName INTO Manholes_GIS_Model_Match FROM Sewer_Manholes WHERE Sewer_Area IS NOT NULL AND FacilityID IS NOT Null GROUP BY Sewer_Area, FacilityID, Acronym, MHName")
@@ -524,7 +542,7 @@ if preprocessing:
 ##    sqls.append("UPDATE Manholes_GIS_Model_Match SET Match_Code = 99")
 
     #Initialize Manholes_GIS_Model_Match table
-    sql = "SELECT Sewer_Manholes.Sewer_Area, msm_Node.Model_Area, Sewer_Manholes.FacilityID, msm_Node.muid, Sewer_Manholes.MHName, msm_Node.assetname, "
+    sql = "SELECT Sewer_Manholes.Sewer_Area, msm_Node.Model_Area, Sewer_Manholes.FacilityID, msm_Node.muid, Sewer_Manholes.Facility_Key, msm_Node.MUID_Key, Sewer_Manholes.MHName, msm_Node.assetname, "
     sql += "Sewer_Manholes.Acronym AS Acronym, msm_Node.acronym AS Model_Acronym, Sewer_Manholes.X_GIS, Sewer_Manholes.Y_GIS, msm_Node.X_Model, msm_Node.Y_Model, "
     sql += "((X_GIS - X_Model)^2 + (Y_GIS - Y_Model)^2)^0.5 AS Distance, 99 AS Match_Code, 0 AS ID_Match, 0 AS Accept_Dist, 0 AS Acronym_Match, 0 AS MHName_Match, "
     sql += "0 AS Map_Match, 0 AS Approved_For_GIS, 0 AS Reviewed, 0 AS Pending_Review "
@@ -555,10 +573,12 @@ if preprocessing:
 ##    sql += "SET Manholes_GIS_Model_Match.MUID = [Manholes_GIS_Model_Match].[muid], Manholes_GIS_Model_Match.Match_Code = Manholes_GIS_Model_Match.Match_Code"
 ##    sqls.append(sql)
 
+##    sqls.append("UPDATE Manholes_GIS_Model_Match SET MUID_Key = 'MUID' & '&' 'MUID'")
+
     #Read manual assignment
     df = pd.read_csv(working_folder + '\\Manholes_Manual_Assignment.csv', dtype={'FacilityID':str,'MUID':str})
     for index, row in df.iterrows():
-        sqls.append("UPDATE Manholes_GIS_Model_Match SET MUID = '" + row['MUID'] + "', Match_Code = 14 WHERE Sewer_area = '" + row['Sewer_Area'] + "' AND FacilityID = '" + row['FacilityID'] + "'")
+        sqls.append("UPDATE Manholes_GIS_Model_Match SET MUID = '" + row['MUID'] + "', MUID_Key = Sewer_Area & '@" + row['MUID'] + "', Match_Code = 14 WHERE Sewer_area = '" + row['Sewer_Area'] + "' AND FacilityID = '" + row['FacilityID'] + "'")
 
     #Register approval for GIS
     sql = "UPDATE Manholes_GIS_Model_Match SET Approved_For_GIS = 1 WHERE Match_Code = 10 OR Match_Code = 14 OR Match_Code = 15"
@@ -569,7 +589,7 @@ if preprocessing:
     sqls.append(sql)
 
     #Transfer the MUID and match code from Manholes_GIS_Model_Match to Sewer_Manholes so they can be mapped.
-    sqls.append("ALTER TABLE Sewer_Manholes ADD COLUMN Match_Code INTEGER, MUID TEXT, Map_Display TEXT, Map_Name TEXT, Pending_Review INTEGER")
+
     sqls.append("UPDATE Sewer_Manholes INNER JOIN Manholes_GIS_Model_Match ON Sewer_Manholes.FacilityID = Manholes_GIS_Model_Match.FacilityID SET \
         Sewer_Manholes.Match_Code = Manholes_GIS_Model_Match.Match_Code, Sewer_Manholes.MUID = Manholes_GIS_Model_Match.MUID, Sewer_Manholes.Pending_Review = Manholes_GIS_Model_Match.Pending_Review")
 
@@ -614,7 +634,7 @@ if preprocessing:
     #Create copy of msm_Link
     sqls = []
     sqls.append("UPDATE Mains_GIS_Model_Match SET Map_Match = 0")
-    sqls.append("UPDATE msm_Link INNER JOIN Mains_GIS_Model_Match ON msm_Link.MUID = Mains_GIS_Model_Match.MUID SET msm_Link.FacilityID = Mains_GIS_Model_Match.FacilityID, msm_Link.Match_Code = Mains_GIS_Model_Match.Match_Code")
+    sqls.append("UPDATE msm_Link INNER JOIN Mains_GIS_Model_Match ON msm_Link.MUID_Key = Mains_GIS_Model_Match.MUID_Key SET msm_Link.FacilityID = Mains_GIS_Model_Match.FacilityID, msm_Link.Match_Code = Mains_GIS_Model_Match.Match_Code")
     sqls.append("UPDATE msm_Link INNER JOIN Mains_GIS_Model_Match ON msm_Link.FacilityID = Mains_GIS_Model_Match.FacilityID SET Map_Match = 1 WHERE msm_Link.FacilityID IS NOT NULL")
     executeQuery(sqls, process_path)
 
@@ -630,10 +650,10 @@ if preprocessing:
         if remaining_count > 0:
             print str(remaining_count) + " records added to msm_Link.map"
             sqls = []
-            sqls.append("UPDATE msm_Link SET FacilityID = '', Match_Code = 0")
-            sqls.append("UPDATE msm_Link INNER JOIN Mains_GIS_Model_Match ON msm_Link.MUID = Mains_GIS_Model_Match.MUID SET msm_Link.FacilityID = Mains_GIS_Model_Match.FacilityID, \
-                msm_Link.Match_Code = Mains_GIS_Model_Match.Match_Code WHERE Mains_GIS_Model_Match.Map_Match = 0 and Mains_GIS_Model_Match.Match_Code <> 99")
-            sqls.append("UPDATE msm_Link INNER JOIN Mains_GIS_Model_Match ON msm_Link.FacilityID = Mains_GIS_Model_Match.FacilityID SET Map_Match = 1 WHERE msm_Link.FacilityID IS NOT NULL")
+            sqls.append("UPDATE msm_Link SET FacilityID = '', Facility_Key = '', Match_Code = 0")
+            sqls.append("UPDATE msm_Link INNER JOIN Mains_GIS_Model_Match ON msm_Link.MUID_Key = Mains_GIS_Model_Match.MUID_Key SET msm_Link.FacilityID = Mains_GIS_Model_Match.FacilityID, \
+                msm_Link.Facility_Key = Mains_GIS_Model_Match.Facility_Key, msm_Link.Match_Code = Mains_GIS_Model_Match.Match_Code WHERE Mains_GIS_Model_Match.Map_Match = 0 and Mains_GIS_Model_Match.Match_Code <> 99")
+            sqls.append("UPDATE msm_Link INNER JOIN Mains_GIS_Model_Match ON msm_Link.Facility_Key = Mains_GIS_Model_Match.Facility_Key SET Map_Match = 1 WHERE msm_Link.FacilityID IS NOT NULL")
             executeQuery(sqls, process_path)
 
             arcpy.MakeFeatureLayer_management('msm_Link', "temp_layer", "Match_Code IS NOT NULL")
@@ -642,9 +662,10 @@ if preprocessing:
 
     sqls = []
     sqls.append("UPDATE Manholes_GIS_Model_Match SET Map_Match = 0")
-    sqls.append("ALTER TABLE msm_Node ADD COLUMN FacilityID TEXT, Match_Code INTEGER")
-    sqls.append("UPDATE msm_Node INNER JOIN Manholes_GIS_Model_Match ON msm_Node.MUID = Manholes_GIS_Model_Match.MUID SET msm_Node.FacilityID = Manholes_GIS_Model_Match.FacilityID, msm_Node.Match_Code = Manholes_GIS_Model_Match.Match_Code")
-    sqls.append("UPDATE msm_Node INNER JOIN Manholes_GIS_Model_Match ON msm_Node.FacilityID = Manholes_GIS_Model_Match.FacilityID SET Map_Match = 1 WHERE msm_Node.FacilityID IS NOT NULL")
+    sqls.append("ALTER TABLE msm_Node ADD COLUMN FacilityID TEXT, Facility_Key TEXT, Match_Code INTEGER")
+    sqls.append("UPDATE msm_Node INNER JOIN Manholes_GIS_Model_Match ON msm_Node.MUID_Key = Manholes_GIS_Model_Match.MUID_Key SET msm_Node.FacilityID = Manholes_GIS_Model_Match.FacilityID, \
+        msm_Node.Facility_Key = Manholes_GIS_Model_Match.Facility_Key, msm_Node.Match_Code = Manholes_GIS_Model_Match.Match_Code")
+    sqls.append("UPDATE msm_Node INNER JOIN Manholes_GIS_Model_Match ON msm_Node.Facility_Key = Manholes_GIS_Model_Match.Facility_Key SET Map_Match = 1 WHERE msm_Node.FacilityID IS NOT NULL")
     executeQuery(sqls, process_path)
 
 
@@ -656,10 +677,10 @@ if preprocessing:
         if remaining_count > 0:
             print str(remaining_count) + " records added to msm_Node.map"
             sqls = []
-            sqls.append("UPDATE msm_Node SET FacilityID = '', Match_Code = 0")
-            sqls.append("UPDATE msm_Node INNER JOIN Manholes_GIS_Model_Match ON msm_Node.MUID = Manholes_GIS_Model_Match.MUID SET msm_Node.FacilityID = Manholes_GIS_Model_Match.FacilityID, \
-                msm_Node.Match_Code = Manholes_GIS_Model_Match.Match_Code WHERE Manholes_GIS_Model_Match.Map_Match = 0 and Manholes_GIS_Model_Match.Match_Code <> 99")
-            sqls.append("UPDATE msm_Node INNER JOIN Manholes_GIS_Model_Match ON msm_Node.FacilityID = Manholes_GIS_Model_Match.FacilityID SET Map_Match = 1 WHERE msm_Node.FacilityID IS NOT NULL")
+            sqls.append("UPDATE msm_Node SET FacilityID = '', FacilityKey = '',  Match_Code = 0")
+            sqls.append("UPDATE msm_Node INNER JOIN Manholes_GIS_Model_Match ON msm_Node.MUID_Key = Manholes_GIS_Model_Match.MUID_Key SET msm_Node.FacilityID = Manholes_GIS_Model_Match.FacilityID, \
+                msm_Node.Facility_Key = Manholes_GIS_Model_Match.Facility_Key, msm_Node.Match_Code = Manholes_GIS_Model_Match.Match_Code WHERE Manholes_GIS_Model_Match.Map_Match = 0 and Manholes_GIS_Model_Match.Match_Code <> 99")
+            sqls.append("UPDATE msm_Node INNER JOIN Manholes_GIS_Model_Match ON msm_Node.Facility_Key = Manholes_GIS_Model_Match.Facility_Key SET Map_Match = 1 WHERE msm_Node.FacilityID IS NOT NULL")
             executeQuery(sqls, process_path)
 
             arcpy.MakeFeatureLayer_management('msm_Node', "temp_layer", "Match_Code IS NOT NULL")
