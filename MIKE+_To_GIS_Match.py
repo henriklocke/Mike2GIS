@@ -1,8 +1,45 @@
-#Version 1: MU classic only
-#Version 2: Works with MIKE+
+#Tool date: July 5 2024
+
+#Start of user input  --------------------------------------------------------------------------------------------------------------------------------
+
+#For all runs except debugging, the following must be True
+preprocessing = True
+make_maps_mains = True
+make_maps_manholes = True
+make_review_csvs = True
+make_mus = True
+
+map_template_pipe = 'Template_Pipe_Review_Map.mxd'
+map_template_node = 'Template_Manhole_Review_Map.mxd'
+processDB = "Model_GIS_Processing.mdb"
+map_subfolder = 'Review_Maps'
+accepted_distance_pipe = 10
+accepted_distance_node = 10
+
+accepted_buffer_fraction = 0.99
+buffer_size = 0.1 #On each side
+expanded_extend_m = 100000
+
+#Do not include Base, must be list of subscenarios, even if only 1
+subscenario_dict = {}
+subscenario_dict['FSA'] = ['2030_Network']
+
+modelCommaSeparated = "FSA_Base_2021pop.sqlite,VSA_BASE_MODEL_2024.sqlite,NSSA_Base_2018pop.sqlite,Lisa_Base.sqlite"
+LayerCommaSeparated = "msm_Node,msm_Link,msm_Orifice,msm_Pump,msm_Valve,msm_Weir"
+
+gis_folder = r'G:\GISLayers\Sewer'
+gis_layers = ['Sewer Mains.lyr','Sewer Manholes.lyr','Sewer Chambers.lyr','Sewer Structures.lyr','Sewer Connection.lyr','Sewer Air Vent.lyr','Sewer Fitting.lyr','Sewer Gates.lyr','Sewer Hatch.lyr','Sewer Valves.lyr','Sewer Pumps.lyr','Sewer Cathodic Protection.lyr','Sewer Flow Meters.lyr','Sewer Pump Stations.lyr','Sewer Rectifiers.lyr','Treatment Plants.lyr']
+gis_extra = []
+gis_layers += gis_extra
+
+sewer_area_file = 'Sewer_Areas.shp'
+sewer_area_field = 'Sewer_Area'
+
+
+
+#End of user input  ----------------------------------------------------------------------------------------------------------------------------------
 
 import pypyodbc #used to run Access queries
-
 import arcpy
 from arcpy import env
 import pandas as pd
@@ -24,6 +61,56 @@ def sql_to_df(sql, full_path):
     cur.close()
     conn.close()
     return df
+
+def dataframe_to_mdb(df, mdb_path, table_name):
+    # Connect to the .mdb file (create if it doesn't exist)
+    conn = pypyodbc.connect(r'DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};DBQ=' + mdb_path)
+    cursor = conn.cursor()
+
+    # Create a dictionary to map pandas dtypes to Access data types
+    dtype_mapping = {
+        'int64': 'INTEGER',
+        'float64': 'DOUBLE',
+        'object': 'TEXT'
+    }
+
+    # Generate the SQL for the CREATE TABLE statement
+    columns = []
+    col_types = []
+    for col_name, dtype in df.dtypes.iteritems():
+        col_type = dtype_mapping.get(str(dtype), 'TEXT')  # Default to TEXT if dtype is not in mapping
+        columns.append("[{}] {}".format(col_name, col_type))
+        col_types.append(col_type)
+    create_table_sql = "CREATE TABLE {} ({})".format(table_name, ', '.join(columns))
+
+    # Drop the table if it already exists
+    try:
+        cursor.execute("DROP TABLE {}".format(table_name))
+        conn.commit()
+    except pypyodbc.DatabaseError:
+        pass  # Ignore error if table doesn't exist
+
+    # Execute the CREATE TABLE statement
+    cursor.execute(create_table_sql)
+    conn.commit()
+
+    # Insert data into the table
+    for index,row in df.iterrows():
+        vals = []
+        for i, col in enumerate(df.columns):
+            val = "'" + row[col] + "'" if type(row[col])==str else str(row[col])
+            print(val)
+            vals.append(val)
+            values = ','.join(vals)
+        print columns
+        insert_sql = "INSERT INTO {} VALUES ({})".format(table_name, values)
+        print insert_sql
+        cursor.execute(insert_sql)
+
+    # Commit the changes and close the connection
+    conn.commit()
+    cursor.close()
+    conn.close()
 
 def executeQuery(sqls, process_path):
     if ".mdb" in process_path:
@@ -84,26 +171,7 @@ def writeMusFile(layerName,elementList,musPath):
 start_timer = datetime.datetime.now()
 working_folder = os.getcwd()
 
-preprocessing = True
-make_maps_mains = True
-make_maps_manholes = True
-make_review_csvs = True
-make_mus = False
 
-map_template_pipe = 'Template_Pipe_Review_Map.mxd'
-map_template_node = 'Template_Manhole_Review_Map.mxd'
-processDB = "Model_GIS_Processing.mdb"
-map_subfolder = 'Review_Maps'
-accepted_distance_pipe = 10
-accepted_distance_node = 10
-
-accepted_buffer_fraction = 0.99
-buffer_size = 0.1 #On each side
-expanded_extend_m = 100000
-
-#Do not include Base, must be list of subscenarios, even if only 1
-subscenario_dict = {}
-subscenario_dict['FSA'] = ['2030_Network']
 
 match_code_dict = {}
 match_code_dict[0] = 'Match by ID, acronym; and start or end location' #Auto accepted
@@ -115,6 +183,7 @@ match_code_dict[5] = 'Match by buffer'
 match_code_dict[6] = 'Match by ID; and upstream and downstream node ID'
 match_code_dict[7] = 'Match by ID and upstream node ID'
 match_code_dict[8] = 'Match by ID and downstream node ID'
+match_code_dict[9] = 'Match by ID only'
 match_code_dict[10] = 'Match by ID, MH Name and location' #Auto accepted
 match_code_dict[11] = 'Match by ID and location'
 match_code_dict[12] = 'Match by ID and MH Name'
@@ -122,36 +191,23 @@ match_code_dict[14] = 'Match by manual assignment'
 match_code_dict[15] = 'Manually approved'
 match_code_dict[99] = 'No match'
 
-muidCommaSeparated = "FSA_Base_2021pop.sqlite,VSA_BASE_MODEL_2024.sqlite,NSSA_Base_2018pop.sqlite,Lisa_Base.sqlite"
-##muidCommaSeparated = "NSSA_Base_2018pop.sqlite"
-LayerCommaSeparated = "msm_Node,msm_Link,msm_Orifice,msm_Pump,msm_Valve,msm_Weir"
 
-gis_folder = r'G:\GISLayers\Sewer'
-gis_layers = ['Sewer Mains.lyr','Sewer Manholes.lyr','Sewer Chambers.lyr','Sewer Structures.lyr','Sewer Connection.lyr','Sewer Air Vent.lyr','Sewer Fitting.lyr','Sewer Gates.lyr','Sewer Hatch.lyr','Sewer Valves.lyr','Sewer Pumps.lyr','Sewer Cathodic Protection.lyr','Sewer Flow Meters.lyr','Sewer Pump Stations.lyr','Sewer Rectifiers.lyr','Treatment Plants.lyr']
-gis_extra = []
-gis_layers += gis_extra
 
-sewer_area_file = 'Sewer_Areas.shp'
-sewer_area_field = 'Sewer_Area'
-
-modelList = [x.strip() for x in muidCommaSeparated.split(',')]
+modelList = [x.strip() for x in modelCommaSeparated.split(',')]
 
 layerList = [x.strip() for x in LayerCommaSeparated.split(',')]
 
-model_areas = [x.split('_')[0].upper() for x in muidCommaSeparated.split(',')]
+model_areas = [x.split('_')[0].upper() for x in modelCommaSeparated.split(',')]
 
 coord_dims = ['X','Y']
 ends = [['Start','first','From'],['End','last','To']]
 
-if '.mdb' in muidCommaSeparated and '.sqlite' in muidCommaSeparated:
-    message = "Tool ends. You cannot have both .mdb and .sqlite in muidCommaSeparated\n\n"
+if '.mdb' in modelCommaSeparated:
+    message = "Tool ends. You cannot have extension mdb in modelCommaSeparated, only sqlite since only MIKE+ files are accepted.\n\n"
     MessageBox = ctypes.windll.user32.MessageBoxA
     MessageBox(None, message, 'Info', 0)
     exit()
-elif '.mdb' in muidCommaSeparated:
-    ext = 'mdb'
-else:
-    ext = 'sqlite'
+
 
 process_path = working_folder + "\\" + processDB
 
@@ -159,9 +215,9 @@ if preprocessing:
 
     #Do review ##################################################################################################################
     #Find the latest review folder
-    pipe_review_found = False
-    node_review_found = False
+    review_majors = ['Mains','Manholes']
     not_founds = []
+
     folders = []
     map_folder = working_folder + '\\' + map_subfolder
     for item in os.listdir(map_folder):
@@ -169,23 +225,37 @@ if preprocessing:
     		if re.match(r'^\d{8}_\d{4}$',item):
     			folders.append(item)
     if len(folders) > 0:
-        review_folder = map_folder + '\\' + max(folders) #Max based on folder name which will be the one with the highest date
-        for model_area in model_areas:
-            review_folder_model = review_folder + '\\' + model_area
-            pipe_review_csv = review_folder_model + '\\' + model_area + '_Review_Mains.csv'
-            print(pipe_review_csv)
-            if os.path.exists(pipe_review_csv):
-                pipe_review_df_single = pd.read_csv(pipe_review_csv, dtype={'FacilityID':str,'MUID':str})
-                pipe_review_df = pipe_review_df_single.copy() if not 'pipe_review_single' in locals() else pd.concat([pipe_review_df,pipe_review_df_single])
-            else:
-                not_founds.append(model_area + '_Review_Mains.csv')
 
-            node_review_csv = review_folder_model + '\\' + model_area + '_Review_Manholes.csv'
-            if os.path.exists(node_review_csv):
-                node_review_df_single = pd.read_csv(node_review_csv, dtype={'FacilityID':str,'MUID':str})
-                node_review_df = node_review_df_single.copy() if not 'node_review_single' in locals() else pd.concat([node_review_df,node_review_df_single])
-            else:
-                not_founds.append(model_area + '_Review_Manholes.csv')
+        review_folder = map_folder + '\\' + max(folders) #Max based on folder name which will be the one with the highest date
+        previous_review_csv = review_folder + '\\Previous_Reviews_Accumulated.csv'
+        if os.path.exists(previous_review_csv):
+            review_df = pd.read_csv(previous_review_csv, dtype={'FacilityID':str,'MUID':str})
+        else:
+            messageText = "WARNING: Previous Review CSV not found. All previous reviews (MAJOR WORK) will be lost!\n\n" + previous_review_csv
+            messageText += "\n\nContinue?"
+            MessageBox = ctypes.windll.user32.MessageBoxA
+            if MessageBox(None, messageText, 'Info', 4) == 7:
+                MessageBox(None, "Please restore a previously backed up version to:\n\n" + previous_review_csv, 'Info', 0)
+                exit()
+
+        for review_major in review_majors:
+
+            for model_area in model_areas:
+                review_folder_model = review_folder + '\\' + model_area
+                review_csv = review_folder_model + '\\' + model_area + '_Review_' + review_major + '.csv'
+
+                print(review_csv)
+                if os.path.exists(review_csv):
+                    review_df_single = pd.read_csv(review_csv, dtype={'FacilityID':str,'MUID':str})
+                    review_df_single['Major'] = review_major
+                    review_df_single['Reviewed_Date'] = max(folders)
+                    review_df_single['Facility_Key'] = review_df_single['Sewer_Area'] + '@' + review_df_single['FacilityID']
+                    review_df['Strong_Key'] = review_df.Major + '@' + review_df.Facility_Key
+                    review_df_single = review_df_single[review_df_single['Accepted'] != 0]
+                    review_df = review_df_single.copy() if not 'review_df' in locals() else pd.concat([review_df,review_df_single])
+                else:
+                    not_founds.append(model_area + '_Review_' + review_major + '.csv')
+
 
         if len(not_founds) > 0:
             messageText = "The following review files were not found: \n\n"
@@ -203,13 +273,18 @@ if preprocessing:
             exit()
 
 
-
-
     #Create database ############################################################################################################################
     #Delete mdb if it exists and create a new
     os.remove(process_path) if os.path.exists(process_path) else None
     arcpy.CreatePersonalGDB_management(working_folder,processDB)
     arcpy.env.workspace = process_path
+
+    if 'review_df' in locals():
+        for review_major in review_majors:
+            review_df_major = review_df[review_df.Major==review_major]
+            table_name = 'Review_' + review_major
+            dataframe_to_mdb(review_df_major, process_path, table_name)
+
 
     sqls = []
     sqls.append("CREATE TABLE Match_Codes (Match_Code INTEGER, Match_Code_Text TEXT)")
@@ -372,8 +447,6 @@ if preprocessing:
         sql = "UPDATE " + l + " SET MUID_Key = Model_Area & '@' & MUID"
         executeQuery(sql,process_path)
         sqls = []
-##        sqls.append("CREATE TABLE Duplicates_All (Model_Area TEXT, MUID TEXT, MUID_Key TEXT, Layer TEXT)")
-##        sqls.append("INSERT INTO Duplicates (Model_Area, MUID) SELECT Model_Area, muid  FROM " + l + " GROUP BY Model_Area, muid HAVING Count(muid)>1")
         sqls.append("SELECT Model_Area, muid, MUID_Key, '" + l + "' AS Layer INTO Duplicates FROM " + l + " GROUP BY Model_Area, muid, MUID_Key HAVING Count(muid)>1")
         sqls.append("UPDATE " + l + " SET Remove_Duplicate = 0")
         sqls.append("UPDATE " + l + " INNER JOIN Duplicates ON (" + l + ".MUID_Key = Duplicates.MUID_Key) SET " + l + ".Remove_Duplicate = 1 WHERE " + l + ".Scenario <> 'Base'")
@@ -406,15 +479,16 @@ if preprocessing:
     sql = "SELECT FacilityID, muid, Facility_KEY, MUID_Key, Sewer_Area, Model_Area, Sewer_Mains.Acronym AS Acronym, msm_Link.Acronym AS Acronym_Model, Start_X_GIS, Start_Y_GIS, End_X_GIS, End_Y_GIS, Start_X_Model, Start_Y_Model, End_X_Model, End_Y_Model, "
     sql += "((Start_X_GIS - Start_X_Model)^2 + (Start_Y_GIS - Start_Y_Model)^2)^0.5 AS Start_Distance, ((End_X_GIS - End_X_Model)^2 + (End_Y_GIS - End_Y_Model)^2)^0.5 AS End_Distance, "
     sql += "0 AS Accept_Dist, 0 AS Accept_Both_Dist, 1 AS ID_Match, 0 AS Acronym_Match, 0 AS Upstream_ID_Match, 0 AS Downstream_ID_Match, 0 AS Buffer_Match, 0 AS Map_Match, 0 AS Reviewed, "
-    sql += "0 AS Pending_Review, 0 AS Approved_For_GIS, 99 AS Match_Code "
+    sql += "0 AS Pending_Review, 0 AS Approved_For_GIS, 99 AS Match_Code, 99 AS Match_Code_Unreviewed "
     sql += "INTO Mains_GIS_Model_Match FROM Sewer_Mains LEFT JOIN msm_Link ON Sewer_Mains.Facility_Key = msm_Link.MUID_Key "
     sql += "WHERE Sewer_Mains.Sewer_Area IS NOT NULL AND Sewer_Mains.FacilityID IS NOT NULL"
     executeQuery(sql,process_path)
 
     sqls = []
 
-    #Matchcode 1: Match by ID, acronym and centerpoint
-    #Matchcode 2: Match by ID and centerpoint
+    #Matchcode 1: Match by ID, acronym and one end point
+    #Matchcode 1: Match by ID and both end points
+    #Matchcode 2: Match by ID and one end point
     #Matchcode 3: Match by ID and acronym
 
     sqls.append("UPDATE Mains_GIS_Model_Match SET Accept_Dist = 1 WHERE (Start_Distance <= " + str(accepted_distance_pipe) + " OR End_Distance <= " + str(accepted_distance_pipe) + ") AND Sewer_Area = Model_Area")
@@ -478,11 +552,23 @@ if preprocessing:
 ##    sqls.append("UPDATE Mains_GIS_Model_Match SET Match_Score = ID_Match + Acronym_Match + Accept_Distance + Upstream_ID_Match + Downstream_ID_match + Buffer_Match")
     sqls.append("UPDATE Mains_GIS_Model_Match SET Reviewed = 0")
 
+    #Matchcode 14: Match by manual assignment
     df = pd.read_csv(working_folder + '\\Mains_Manual_Assignment.csv', dtype={'FacilityID':str,'MUID':str})
     for index, row in df.iterrows():
         sqls.append("UPDATE Mains_GIS_Model_Match SET MUID = '" + row['MUID'] + "', MUID_Key = Sewer_Area & '@" + row['MUID'] + "', Match_Code = 14 WHERE Sewer_area = '" + row['Sewer_Area'] + "' AND FacilityID = '" + row['FacilityID'] + "'")
 
+    #Copy Match_Code field to store match keys prior to giving code 15 (reviewed) because this value is later used to compare before/after match codes.
+    sqls.append("UPDATE Mains_GIS_Model_Match SET Match_Code_Unreviewed = Match_Code")
+
+    #Matchcode 15: Match by manual review
+    if 'review_df' in locals():
+        sqls.append("UPDATE Mains_GIS_Model_Match INNER JOIN Review_Mains ON Review_Mains.Facility_Key = Mains_GIS_Model_Match.Facility_Key SET \
+            Mains_GIS_Model_Match.MUID = Review_Mains.MUID, Mains_GIS_Model_Match.MUID_Key = Mains_GIS_Model_Match.Sewer_Area & '@' & Review_Mains.MUID, Mains_GIS_Model_Match.Match_Code = 15 \
+            WHERE Mains_GIS_Model_Match.Match_Code = Review_Mains.Match_Code")
+
+
     sqls.append("ALTER TABLE Sewer_Mains ADD COLUMN Match_Code INTEGER, MUID TEXT, Map_Display TEXT, Map_Name TEXT, Approved_For_GIS INTEGER, Pending_Review INTEGER")
+
     executeQuery(sqls, process_path)
 
     sqls = []
@@ -544,7 +630,7 @@ if preprocessing:
     #Initialize Manholes_GIS_Model_Match table
     sql = "SELECT Sewer_Manholes.Sewer_Area, msm_Node.Model_Area, Sewer_Manholes.FacilityID, msm_Node.muid, Sewer_Manholes.Facility_Key, msm_Node.MUID_Key, Sewer_Manholes.MHName, msm_Node.assetname, "
     sql += "Sewer_Manholes.Acronym AS Acronym, msm_Node.acronym AS Model_Acronym, Sewer_Manholes.X_GIS, Sewer_Manholes.Y_GIS, msm_Node.X_Model, msm_Node.Y_Model, "
-    sql += "((X_GIS - X_Model)^2 + (Y_GIS - Y_Model)^2)^0.5 AS Distance, 99 AS Match_Code, 0 AS ID_Match, 0 AS Accept_Dist, 0 AS Acronym_Match, 0 AS MHName_Match, "
+    sql += "((X_GIS - X_Model)^2 + (Y_GIS - Y_Model)^2)^0.5 AS Distance, 99 AS Match_Code, 99 AS Match_Code_Unreviewed, 0 AS ID_Match, 0 AS Accept_Dist, 0 AS Acronym_Match, 0 AS MHName_Match, "
     sql += "0 AS Map_Match, 0 AS Approved_For_GIS, 0 AS Reviewed, 0 AS Pending_Review "
     sql += "INTO Manholes_GIS_Model_Match FROM Sewer_Manholes INNER JOIN msm_Node ON Sewer_Manholes.FacilityID = msm_Node.muid "
     sql += "WHERE Sewer_Manholes.Sewer_Area Is Not Null AND msm_Node.Model_Area=Sewer_Manholes.Sewer_Area"
@@ -575,10 +661,20 @@ if preprocessing:
 
 ##    sqls.append("UPDATE Manholes_GIS_Model_Match SET MUID_Key = 'MUID' & '&' 'MUID'")
 
-    #Read manual assignment
+    #Match code 14: Read manual assignment
     df = pd.read_csv(working_folder + '\\Manholes_Manual_Assignment.csv', dtype={'FacilityID':str,'MUID':str})
     for index, row in df.iterrows():
         sqls.append("UPDATE Manholes_GIS_Model_Match SET MUID = '" + row['MUID'] + "', MUID_Key = Sewer_Area & '@" + row['MUID'] + "', Match_Code = 14 WHERE Sewer_area = '" + row['Sewer_Area'] + "' AND FacilityID = '" + row['FacilityID'] + "'")
+
+
+    #Copy Match_Code field to store match keys prior to giving code 15 (reviewed) because this value is later used to compare before/after match codes.
+    sqls.append("UPDATE Manholes_GIS_Model_Match SET Match_Code_Unreviewed = Match_Code")
+
+    #Matchcode 15: Match by manual review
+    if 'review_df' in locals():
+        sqls.append("UPDATE Manholes_GIS_Model_Match INNER JOIN Review_Manholes ON Review_Manholes.Facility_Key = Manholes_GIS_Model_Match.Facility_Key SET \
+            Manholes_GIS_Model_Match.MUID = Review_Manholes.MUID, Manholes_GIS_Model_Match.MUID_Key = Manholes_GIS_Model_Match.Sewer_Area & '@' & Review_Manholes.MUID, Manholes_GIS_Model_Match.Match_Code = 15 \
+            WHERE Manholes_GIS_Model_Match.Match_Code = Review_Manholes.Match_Code")
 
     #Register approval for GIS
     sql = "UPDATE Manholes_GIS_Model_Match SET Approved_For_GIS = 1 WHERE Match_Code = 10 OR Match_Code = 14 OR Match_Code = 15"
@@ -614,22 +710,6 @@ if preprocessing:
 
     ##################################################################################################################################################################################
 
-    #Create mus files
-    if make_mus:
-        for sewer_area_name in sewer_area_names:
-            sql = "SELECT muid FROM Upstream_Downstream_Match WHERE ID_Match = 0 AND Sewer_Area = '" + sewer_area_name + "'"
-            df = sql_to_df(sql, process_path)
-            muids = list(df.muid.unique())
-            writeMusFile('msm_Link',muids,working_folder + '\\' + sewer_area_name + '_US_And_DS_But_Not_ID_Match.mus')
-
-            sql = "SELECT Match_Code FROM Mains_GIS_Model_Match WHERE Sewer_Area = '" + sewer_area_name + "' GROUP BY Match_Code"
-            df = sql_to_df(sql, process_path)
-            match_codes = list(df.match_code.unique())
-            for match_code in match_codes:
-                sql = "SELECT muid FROM Mains_GIS_Model_Match WHERE Match_Code = " + str(match_code) + " AND Sewer_Area = '" + sewer_area_name + "'"
-                df = sql_to_df(sql, process_path)
-                muids = list(df.muid.unique())
-                writeMusFile('msm_Link',muids,working_folder + '\\' + sewer_area_name + "_Pipes_Match_Code_" + str(match_code) + ".mus")
 
     #Create copy of msm_Link
     sqls = []
@@ -687,7 +767,7 @@ if preprocessing:
             arcpy.Append_management(inputs='temp_layer', target='msm_Node_Map', schema_type="NO_TEST", field_mapping="", subtype="")
             arcpy.Delete_management("temp_layer")
 
-if make_maps_manholes or make_maps_mains or make_review_csvs:
+if make_maps_manholes or make_maps_mains or make_review_csvs or make_mus:
     #Mains Maps
     dated_subfolder = str(datetime.datetime.now())[:16].replace('-','').replace(':','').replace(' ','_')
     map_folder = working_folder + '\\' + map_subfolder + '\\' + dated_subfolder
@@ -699,9 +779,8 @@ if make_maps_manholes or make_maps_mains or make_review_csvs:
     shutil.copy(working_folder  + '\\' + processDB,map_folder  + '\\' + processDB)
     shutil.copy(working_folder  + '\\Mains_Manual_Assignment.csv',map_folder  + '\\Mains_Manual_Assignment.csv')
     shutil.copy(working_folder  + '\\Manholes_Manual_Assignment.csv',map_folder  + '\\Manholes_Manual_Assignment.csv')
-    for m in modelList:
-        shutil.copy(working_folder  + '\\' + m,map_folder  + '\\' + m)
-
+    shutil.copy(working_folder  + '\\Mains_GIS_Model_Match.csv',map_folder  + '\\Mains_GIS_Model_Match.csv')
+    shutil.copy(working_folder  + '\\Manhole_GIS_Model_Match.csv',map_folder  + '\\Manhole_GIS_Model_Match.csv')
 
     sql = "SELECT Sewer_Area FROM Sewer_Mains GROUP BY Sewer_Area HAVING Sewer_Area <> ''"
     sewer_areas = readQuery(sql,process_path)
@@ -709,6 +788,57 @@ if make_maps_manholes or make_maps_mains or make_review_csvs:
         sewer_area = sewer_area[0]
         map_subfolder = map_folder + '\\' + sewer_area
         if not os.path.isdir(map_subfolder): os.makedirs(map_subfolder)
+
+    #Create mus files
+    if make_mus:
+        for m in modelList:
+
+            model_area = m.split('_')[0].upper()
+
+            mus_folder = map_folder + '\\' + model_area + '\\MUS_Selection_Files'
+            if not os.path.isdir(mus_folder): os.makedirs(mus_folder)
+            for major in review_majors:
+                muid_ticked = []
+                sql = "SELECT Match_Code FROM " + major + "_GIS_Model_Match WHERE Sewer_Area = '" + model_area + "' GROUP BY Match_Code"
+                df = sql_to_df(sql, process_path)
+                match_codes = list(df.match_code.unique())
+                for match_code in match_codes:
+                    sql = "SELECT muid FROM " + major + "_GIS_Model_Match WHERE Match_Code = " + str(match_code) + " AND Sewer_Area = '" + model_area + "'"
+                    df = sql_to_df(sql, process_path)
+                    muids = list(df.muid.unique())
+                    muid_ticked +=muids
+                    layer_name = 'msm_Link' if major == 'Mains' else 'msm_Node'
+                    writeMusFile(layer_name,muids,mus_folder + '\\' + model_area + "_" + major + "_Match_Code_" + str(match_code) + ".mus")
+                muid_ticked = set(muid_ticked)
+                sql = "SELECT MUID from " + layer_name + " WHERE Model_Area = '" + model_area + "' GROUP BY MUID"
+                df = sql_to_df(sql, process_path)
+                muid_unticked = set(df.muid.unique())
+                for muid in muid_ticked:
+                    muid_unticked.discard(muid)
+                writeMusFile(layer_name,muid_unticked,mus_folder + '\\' + model_area + "_" + major + "_Remaining_Unmatched.mus")
+                muid_ticked = set(muid_ticked)
+
+
+    if 'review_df' in locals():
+
+        for major in review_majors:
+            skip_keys = []
+            sql = "SELECT '" + major + "@' & " + major + "_GIS_Model_Match.Facility_Key AS Strong_Key, " + major + "_GIS_Model_Match.Facility_Key, Review_" + major + ".Match_Code AS Reviewed_Match_Code, " + major + "_GIS_Model_Match.Match_Code_Unreviewed AS New_Match_Code "
+            sql += "FROM " + major + "_GIS_Model_Match INNER JOIN Review_" + major + " ON Review_" + major + ".Facility_Key = " + major + "_GIS_Model_Match.Facility_Key  "
+            sql += "WHERE " + major + "_GIS_Model_Match.Match_Code_Unreviewed <> Review_" + major + ".Match_Code"
+            for row in readQuery(sql,process_path):
+                skip_key = str(row[0])
+                skip_keys.append(skip_key)
+                review_df = review_df[review_df.Strong_Key!=skip_key]
+            skip_df = sql_to_df(sql,process_path) if not 'skip_df' in locals() else pd.concat([skip_df,sql_to_df(sql,process_path)])
+        skip_df['Explanation'] = "This reviewed element is skipped because the match code at time of review was different than the current match code."
+        skip_df.to_csv(map_folder  + '\\Skipped_Review_Elements.csv',index=False)
+
+
+        review_df.to_csv(map_folder + '\\Previous_Reviews_Accumulated.csv',index=False)
+    for m in modelList:
+        shutil.copy(working_folder  + '\\' + m,map_folder  + '\\' + m)
+
 
     if make_review_csvs:
         #Make review sheets
