@@ -548,8 +548,12 @@ if preprocessing:
     sql += "SET Mains_GIS_Model_Match.MUID = Downstream_Match.muid, Mains_GIS_Model_Match.MUID_Key = Downstream_Match.MUID_Key, Mains_GIS_Model_Match.Match_Code = 8, Downstream_ID_Match = 1 WHERE Mains_GIS_Model_Match.Match_Code=99"
     sqls.append(sql)
 
+    #Matchcode 9: Match by ID only
+    sqls.append("UPDATE Mains_GIS_Model_Match SET Match_Code = 9 WHERE FacilityID = MUID AND Match_Code = 99")
+
     sqls.append("UPDATE Mains_GIS_Model_Match SET ID_Match = 1 WHERE FacilityID = MUID")
-##    sqls.append("UPDATE Mains_GIS_Model_Match SET Match_Score = ID_Match + Acronym_Match + Accept_Distance + Upstream_ID_Match + Downstream_ID_match + Buffer_Match")
+
+
     sqls.append("UPDATE Mains_GIS_Model_Match SET Reviewed = 0")
 
     #Matchcode 14: Match by manual assignment
@@ -579,7 +583,7 @@ if preprocessing:
     sqls.append(sql)
 
     #Register for upcoming manual approval
-    sql = "UPDATE Mains_GIS_Model_Match SET Pending_Review = 1 WHERE Match_Code = 2 OR Match_Code = 3 OR Match_Code = 6 OR Match_Code = 5 OR Match_Code = 7 OR Match_Code = 8"
+    sql = "UPDATE Mains_GIS_Model_Match SET Pending_Review = 1 WHERE Match_Code = 2 OR Match_Code = 3 OR Match_Code = 6 OR Match_Code = 5 OR Match_Code = 7 OR Match_Code = 8 OR Match_Code = 9"
     sqls.append(sql)
 
 
@@ -654,18 +658,13 @@ if preprocessing:
     sql = "UPDATE Manholes_GIS_Model_Match SET Match_Code = 12 WHERE MHName_Match = 1 AND Accept_Dist = 0"
     sqls.append(sql)
 
-##    #Now transfer these values to Manholes_GIS_Model_Match
-##    sql = "UPDATE Manholes_GIS_Model_Match INNER JOIN Manholes_GIS_Model_Match ON (Manholes_GIS_Model_Match.FacilityID = Manholes_GIS_Model_Match.FacilityID) AND (Manholes_GIS_Model_Match.Sewer_Area = Manholes_GIS_Model_Match.Sewer_Area) "
-##    sql += "SET Manholes_GIS_Model_Match.MUID = [Manholes_GIS_Model_Match].[muid], Manholes_GIS_Model_Match.Match_Code = Manholes_GIS_Model_Match.Match_Code"
-##    sqls.append(sql)
-
-##    sqls.append("UPDATE Manholes_GIS_Model_Match SET MUID_Key = 'MUID' & '&' 'MUID'")
+    #Matchcode 9: Match by ID only
+    sqls.append("UPDATE Manholes_GIS_Model_Match SET Match_Code = 9 WHERE FacilityID = MUID AND Match_Code = 99")
 
     #Match code 14: Read manual assignment
     df = pd.read_csv(working_folder + '\\Manholes_Manual_Assignment.csv', dtype={'FacilityID':str,'MUID':str})
     for index, row in df.iterrows():
         sqls.append("UPDATE Manholes_GIS_Model_Match SET MUID = '" + row['MUID'] + "', MUID_Key = Sewer_Area & '@" + row['MUID'] + "', Match_Code = 14 WHERE Sewer_area = '" + row['Sewer_Area'] + "' AND FacilityID = '" + row['FacilityID'] + "'")
-
 
     #Copy Match_Code field to store match keys prior to giving code 15 (reviewed) because this value is later used to compare before/after match codes.
     sqls.append("UPDATE Manholes_GIS_Model_Match SET Match_Code_Unreviewed = Match_Code")
@@ -681,7 +680,7 @@ if preprocessing:
     sqls.append(sql)
 
     #Register for upcoming manual approval
-    sql = "UPDATE Manholes_GIS_Model_Match SET Pending_Review = 1 WHERE Match_Code = 11 OR Match_Code = 12 OR Match_Code = 13"
+    sql = "UPDATE Manholes_GIS_Model_Match SET Pending_Review = 1 WHERE Match_Code = 9 OR Match_Code = 11 OR Match_Code = 12 OR Match_Code = 13"
     sqls.append(sql)
 
     #Transfer the MUID and match code from Manholes_GIS_Model_Match to Sewer_Manholes so they can be mapped.
