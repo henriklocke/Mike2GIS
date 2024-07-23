@@ -1,4 +1,4 @@
-#Tool date: July 5 2024
+#Tool date: July 23 2024
 
 #Start of user input  --------------------------------------------------------------------------------------------------------------------------------
 
@@ -224,6 +224,13 @@ if preprocessing:
     	if os.path.isdir(os.path.join(map_folder, item)):
     		if re.match(r'^\d{8}_\d{4}$',item):
     			folders.append(item)
+
+    #Check for manual assignment csv
+    for csv_file in ['Mains_Manual_Assignment.csv','Manholes_Manual_Assignment.csv']:
+        if not os.path.exists(working_folder + '\\' + csv_file):
+            MessageBox(None, csv_file + ' not found in the tool folder.', 'Error', 0)
+            exit()
+
     if len(folders) > 0:
 
         review_folder = map_folder + '\\' + max(folders) #Max based on folder name which will be the one with the highest date
@@ -284,7 +291,6 @@ if preprocessing:
             review_df_major = review_df[review_df.Major==review_major]
             table_name = 'Review_' + review_major
             dataframe_to_mdb(review_df_major, process_path, table_name)
-
 
     sqls = []
     sqls.append("CREATE TABLE Match_Codes (Match_Code INTEGER, Match_Code_Text TEXT)")
@@ -633,7 +639,7 @@ if preprocessing:
 
     #Initialize Manholes_GIS_Model_Match table
     sql = "SELECT Sewer_Manholes.Sewer_Area, msm_Node.Model_Area, Sewer_Manholes.FacilityID, msm_Node.muid, Sewer_Manholes.Facility_Key, msm_Node.MUID_Key, Sewer_Manholes.MHName, msm_Node.assetname, "
-    sql += "Sewer_Manholes.Acronym AS Acronym, msm_Node.acronym AS Model_Acronym, Sewer_Manholes.X_GIS, Sewer_Manholes.Y_GIS, msm_Node.X_Model, msm_Node.Y_Model, "
+    sql += "Sewer_Manholes.Acronym AS Acronym, msm_Node.acronym AS Model_Acronym, msm_Node.InvertLevel, msm_Node.CriticalLevel AS SOH, Sewer_Manholes.X_GIS, Sewer_Manholes.Y_GIS, msm_Node.X_Model, msm_Node.Y_Model, "
     sql += "((X_GIS - X_Model)^2 + (Y_GIS - Y_Model)^2)^0.5 AS Distance, 99 AS Match_Code, 99 AS Match_Code_Unreviewed, 0 AS ID_Match, 0 AS Accept_Dist, 0 AS Acronym_Match, 0 AS MHName_Match, "
     sql += "0 AS Map_Match, 0 AS Approved_For_GIS, 0 AS Reviewed, 0 AS Pending_Review "
     sql += "INTO Manholes_GIS_Model_Match FROM Sewer_Manholes INNER JOIN msm_Node ON Sewer_Manholes.FacilityID = msm_Node.muid "
@@ -697,7 +703,7 @@ if preprocessing:
 
     sqls.append("UPDATE Manholes_GIS_Model_Match SET Reviewed = 0")
 
-    sqls.append("SELECT Sewer_Area, FacilityID, Acronym, MHName, MUID, Match_Code, Approved_For_GIS INTO Manholes_GIS_Model_Match_Final FROM Manholes_GIS_Model_Match")
+    sqls.append("SELECT Sewer_Area, FacilityID, Acronym, MHName, MUID, InvertLevel, SOH, Match_Code, Approved_For_GIS INTO Manholes_GIS_Model_Match_Final FROM Manholes_GIS_Model_Match")
     sqls.append("UPDATE Manholes_GIS_Model_Match_Final SET MUID = '' WHERE Approved_For_GIS = 0")
 
     executeQuery(sqls, process_path)
@@ -776,8 +782,8 @@ if make_maps_manholes or make_maps_mains or make_review_csvs or make_mus:
     shutil.copy(working_folder  + '\\' + map_template_pipe,map_folder  + '\\' + map_template_pipe)
     shutil.copy(working_folder  + '\\' + map_template_node,map_folder  + '\\' + map_template_node)
     shutil.copy(working_folder  + '\\' + processDB,map_folder  + '\\' + processDB)
-    shutil.copy(working_folder  + '\\Mains_Manual_Assignment.csv',map_folder  + '\\Mains_Manual_Assignment.csv')
-    shutil.copy(working_folder  + '\\Manholes_Manual_Assignment.csv',map_folder  + '\\Manholes_Manual_Assignment.csv')
+    shutil.copy(working_folder  + '\\Mains_Manual_Assignment.csv',map_folder  + '\\Mains_Manual_Assignment_Backup_DO_NOT_EDIT.csv')
+    shutil.copy(working_folder  + '\\Manholes_Manual_Assignment.csv',map_folder  + '\\Manholes_Manual_Assignment_Backup_DO_NOT_EDIT.csv.csv')
     shutil.copy(working_folder  + '\\Mains_GIS_Model_Match.csv',map_folder  + '\\Mains_GIS_Model_Match.csv')
     shutil.copy(working_folder  + '\\Manhole_GIS_Model_Match.csv',map_folder  + '\\Manhole_GIS_Model_Match.csv')
 
