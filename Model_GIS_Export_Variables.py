@@ -4,13 +4,17 @@
 
 #All setups, initialize lists to not throw error if undefined.
 master_list = []
-absolute_velocity_discharge = True #If True then negative values are changed to positive values.
+absolute_velocity_discharge = False #If True negative values changed to positive. If False, the max may be negative (if reverse is largest)
 
 acronym_filter = []
 
 rawn_years = [2060,2070,2080,2090,2100]
 
+#MUST CHANGE THIS BACK!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 output_folder = r'\\gvrdfile01\gisdata\PROJECTS\CP18\07\KeyFlowsandHGL\Datafiles'
+# output_folder = r'J:\TOOLS\Key_Flow_HGL_RAWN_Tool\Tool_3_Rawn_Model_Result_To_GIS\Review\Datafiles\Review_Reverse'
+
+
 model_manhole_csv = r"J:\UAI_GENERAL\KEY FLOW & HGL_GIS\TOOLS EXECUTION\TOOL1\Manhole_GIS_Model_Match.csv"
 model_pipe_csv = r"J:\UAI_GENERAL\KEY FLOW & HGL_GIS\TOOLS EXECUTION\TOOL1\Mains_GIS_Model_Match.csv"
 
