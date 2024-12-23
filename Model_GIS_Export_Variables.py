@@ -10,16 +10,14 @@ acronym_filter = []
 
 rawn_years = [2060,2070,2080,2090,2100]
 
-#MUST CHANGE THIS BACK!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 output_folder = r'\\gvrdfile01\gisdata\PROJECTS\CP18\07\KeyFlowsandHGL\Datafiles'
-# output_folder = r'J:\TOOLS\Key_Flow_HGL_RAWN_Tool\Tool_3_Rawn_Model_Result_To_GIS\Review\Datafiles\Review_Reverse'
-
 
 model_manhole_csv = r"J:\UAI_GENERAL\KEY FLOW & HGL_GIS\TOOLS EXECUTION\TOOL1\Manhole_GIS_Model_Match.csv"
 model_pipe_csv = r"J:\UAI_GENERAL\KEY FLOW & HGL_GIS\TOOLS EXECUTION\TOOL1\Mains_GIS_Model_Match.csv"
 
 rawn_input_from_model = True
 open_save_close = False #Use if model RAWN sheets have not been opened and saved before (required to calculate the formulas in opepyxl sheets)
+open_save_close_filter = [] #List of sewer areas to open/save/close. If empty list, all will be opened/saved/closed
 
 #Only used when rawn_input_from_model = False
 rawn_csv = r"J:\SEWER_AREA_MODELS\FSA\04_ANALYSIS_WORK\Model_Result_To_GIS\Automation\RAWN_Files.csv"
@@ -31,6 +29,7 @@ rawn_inputfolders = []
 rawn_inputfolders.append(['FSA',r"J:\SEWER_AREA_MODELS\FSA\04_ANALYSIS_WORK\RAWN_From_Model\Excel"])
 rawn_inputfolders.append(['NSSA',r"J:\SEWER_AREA_MODELS\NSSA\04_ANALYSIS_WORK\RAWN_From_Model\Excel"])
 rawn_inputfolders.append(['LISA',r"J:\SEWER_AREA_MODELS\LISA\04_ANALYSIS_WORK\RAWN_From_Model\Excel"])
+rawn_inputfolders.append(['VSA',r"J:\SEWER_AREA_MODELS\VSA\04_ANALYSIS_WORK\79. RAWN_From_Model\Excel"])
 
 #&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
 #&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
@@ -40,7 +39,7 @@ rawn_inputfolders.append(['LISA',r"J:\SEWER_AREA_MODELS\LISA\04_ANALYSIS_WORK\RA
 #([Description,Population Year,Result file name with extension])D
 
 model_area = 'VSA'
-model = 'VSA_BASE_MODEL_2030_Backup304_DWF_No_Tide.mdb' #Used to read version and extension, one model is enough.
+model = 'VSA_BASE_MODEL_2025_Backup305_2y_24h.mdb' #Used to read version and extension, one model is enough.
 model_folder = r"J:\SEWER_AREA_MODELS\VSA\03_SIMULATION_WORK\Key_Flow_HGL_GIS_Sim_VSA\Model"
 
 res_list = []
@@ -59,7 +58,7 @@ res_list.append(['DS-25yr-24hr',2030,'VSA_WWF_EX-25yr-24hr-SCS1A_2030pop_Base.re
 master_list.append([model_area,model,model_folder,output_folder,res_list])
 
 model_area = 'FSA'
-model = 'FSA_2025pop_V157.sqlite' #Used to read version and extension, one model is enough.
+model = 'FSA_2025pop_V176.sqlite' #Used to read version and extension, one model is enough.
 model_folder = r"J:\SEWER_AREA_MODELS\FSA\03_SIMULATION_WORK\Key_Flow_HGL_GIS_Sim_FSA\Model"
 
 res_list = []
@@ -78,7 +77,7 @@ res_list.append(['DS-25yr-24hr',2030,'FSA_GA_EX-25y-24h-AES_2030p_F_2030_Network
 master_list.append([model_area,model,model_folder,output_folder,res_list])
 
 model_area = 'NSSA'
-model = 'NSSA_2025pop_V88.sqlite' #Used to read version and extension, one model is enough.
+model = 'NSSA_2025pop_V93.sqlite' #Used to read version and extension, one model is enough.
 model_folder = r"\\prdsynfile01\LWS_Modelling\SEWER_AREA_MODELS\NSSA\03_SIMULATION_WORK\Key_Flow_HGL_GIS_Sim_NSSA\Model"
 
 res_list = []
